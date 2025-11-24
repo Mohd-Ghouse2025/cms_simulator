@@ -52,8 +52,8 @@ export const useWebSocketChannel = ({
   const reconnectTimer = useRef<number | null>(null);
   const connectRef = useRef<() => void>(() => {});
   const manualCloseRef = useRef(false);
-  const messageHandlerRef = useRef<typeof onMessage>();
-  const unauthorizedHandlerRef = useRef<typeof onUnauthorized>();
+  const messageHandlerRef = useRef<typeof onMessage>(onMessage);
+  const unauthorizedHandlerRef = useRef<typeof onUnauthorized>(onUnauthorized);
   const reconnectDelayRef = useRef(Math.max(reconnectDelayMs ?? MIN_RECONNECT_DELAY, MIN_RECONNECT_DELAY));
   const baseDelay = Math.max(reconnectDelayMs ?? MIN_RECONNECT_DELAY, MIN_RECONNECT_DELAY);
   const maxDelay = Math.max(

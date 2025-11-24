@@ -176,6 +176,7 @@ export interface SimulatedSession {
     | "timeout";
   started_at?: string | null;
   completed_at?: string | null;
+   updated_at?: string | null;
   meter_start_wh?: number | null;
   meter_stop_wh?: number | null;
   meter_target_wh?: number | null;

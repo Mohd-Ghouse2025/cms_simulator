@@ -82,6 +82,10 @@ interface CmsChargingSession {
   end_time: string | null;
   meter_start: number;
   meter_stop: number | null;
+  meter_start_kwh?: number | null;
+  meter_stop_kwh?: number | null;
+  energy_kwh?: number | null;
+  price_per_kwh?: number | null;
   cost: number | null;
   id_tag?: number | null;
 }
@@ -303,11 +307,12 @@ const compareTimelineEventsDesc = (a: TimelineEvent, b: TimelineEvent): number =
 };
 
 const formatNumber = (value: number | undefined, options?: { digits?: number; fallback?: string }) => {
-  if (!Number.isFinite(value)) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
     return options?.fallback ?? "—";
   }
   const digits = options?.digits ?? 2;
-  return value.toFixed(digits);
+  return numeric.toFixed(digits);
 };
 
 const timelineToneForStatus = (status?: string): TimelineTone => {
@@ -1685,7 +1690,20 @@ const activeSession = useMemo(() => {
           if (connector.connector_id !== connectorId) {
             return connector;
           }
-          const resolvedStatus = status ?? connector.initial_status ?? "Available";
+          const normalized = (status ?? connector.initial_status ?? "AVAILABLE").toString().toUpperCase();
+          const allowedStatuses: ConnectorStatus[] = [
+            "AVAILABLE",
+            "PREPARING",
+            "CHARGING",
+            "SUSPENDED_EV",
+            "SUSPENDED_EVSE",
+            "FINISHING",
+            "FAULTED",
+            "UNAVAILABLE"
+          ];
+          const resolvedStatus = allowedStatuses.includes(normalized as ConnectorStatus)
+            ? (normalized as ConnectorStatus)
+            : (connector.initial_status ?? "AVAILABLE");
           if (connector.initial_status === resolvedStatus) {
             return connector;
           }
@@ -1975,7 +1993,9 @@ const activeSession = useMemo(() => {
             const sampleTimestamp =
               typeof event.sampleTimestamp === "string"
                 ? event.sampleTimestamp
-                : event.timestamp ?? new Date().toISOString();
+                : typeof event.timestamp === "string"
+                  ? event.timestamp
+                  : new Date().toISOString();
             let recordedSample: NormalizedSample | null = null;
             setMeterTimelines((current) => {
               const existing = current[connectorId];
@@ -2259,7 +2279,7 @@ const activeSession = useMemo(() => {
             if (transactionId && existing.transactionId && existing.transactionId !== transactionId) {
               return current;
             }
-            const updatedSession = {
+            const updatedSession: SessionRuntime = {
               ...existing,
               state: "completed",
               completedAt: sampleTimestamp ?? endedAt,
