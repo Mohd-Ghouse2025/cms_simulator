@@ -1,0 +1,230 @@
+.sidebar {
+  width: var(--sidebar-width);
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--sidebar-border);
+  background: var(--sidebar-surface);
+  color: #f6f9fc;
+  min-height: 100vh;
+  transition: width var(--transition-medium);
+  box-sizing: border-box;
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 100vh;
+  overflow-y: auto;
+  padding-bottom: 24px;
+  z-index: 30;
+}
+
+.topBar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 var(--sidebar-gutter);
+  min-height: var(--header-height);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  justify-content: center;
+}
+
+.brand {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px;
+  border-radius: var(--corner-base);
+  background: var(--sidebar-brand-bg);
+  border: 1px solid var(--sidebar-brand-border);
+  box-shadow: var(--sidebar-brand-shadow);
+  color: var(--sidebar-brand-color);
+  font-family: inherit;
+}
+
+.brandMark {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--corner-base);
+  background: var(--sidebar-logo-bg);
+  color: var(--sidebar-logo-color);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+
+.brandMeta {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  margin-top: -2px;
+  align-items: flex-start;
+  color: var(--sidebar-brand-color);
+}
+
+.brandName {
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: inherit;
+}
+
+.sidebarCollapsed {
+  width: var(--sidebar-collapsed-width);
+  align-items: center;
+}
+
+.sidebarCollapsed .topBar {
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 12px;
+  min-height: var(--header-height);
+  justify-content: center;
+}
+
+.sidebarCollapsed .brand {
+  justify-content: center;
+  padding: 8px;
+  width: 100%;
+}
+
+.sidebarCollapsed .brandMeta {
+  display: none;
+}
+
+.sectionLabel {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sidebar-muted);
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  position: relative;
+  z-index: 1;
+  padding: 12px var(--sidebar-gutter) 8px;
+}
+
+.sectionTitle {
+  font-weight: 600;
+}
+
+.collapseButton {
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  width: 36px;
+  height: 36px;
+  border-radius: var(--corner-base);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color var(--transition-medium),
+    background var(--transition-medium);
+  flex-shrink: 0;
+}
+
+.collapseButton:hover {
+  border-color: rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+  z-index: 1;
+  padding: 0 var(--sidebar-gutter) 24px;
+}
+
+.sidebarCollapsed .nav {
+  align-items: center;
+  padding: 0 8px 20px;
+}
+
+.sidebarCollapsed .sectionLabel {
+  justify-content: center;
+  padding: 12px 0 8px;
+}
+
+.link {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: var(--corner-base);
+  color: var(--sidebar-muted);
+  border: 1px solid transparent;
+  transition: border-color var(--transition-medium),
+    color var(--transition-medium), background var(--transition-medium);
+}
+
+.link:hover {
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.active {
+  color: #ffffff;
+  border-color: rgba(34, 200, 184, 0.4);
+  background: rgba(34, 200, 184, 0.18);
+}
+
+.icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--corner-base);
+  background: rgba(255, 255, 255, 0.1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.collapsedLink {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.collapsedLink .label {
+  display: none;
+}
+
+.label {
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.sidebarCollapsed .sectionLabel {
+  justify-content: center;
+}
+
+.sidebarCollapsed .sectionTitle {
+  display: none;
+}
+
+.sidebarCollapsed .collapseButton {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+@media (max-width: 960px) {
+  .sidebar {
+    position: static;
+    width: 100%;
+    height: auto;
+    overflow: visible;
+    padding-bottom: 0;
+  }
+
+  .sidebarCollapsed {
+    width: 100%;
+  }
+}

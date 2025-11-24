@@ -1,0 +1,124 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.templatesSection {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 24px;
+}
+
+.selectedRow {
+  background: rgba(17, 94, 251, 0.08);
+}
+
+.description {
+  color: var(--color-slate-500);
+}
+
+.scenarioHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.tagList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(11, 30, 63, 0.06);
+  color: var(--color-slate-500);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sectionHeading {
+  font-size: 14px;
+  font-weight: 600;
+  margin-top: 12px;
+  margin-bottom: 8px;
+}
+
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 16px;
+}
+
+.steps code {
+  background: rgba(11, 30, 63, 0.08);
+  border-radius: 6px;
+  padding: 6px 10px;
+  display: block;
+  white-space: pre-wrap;
+  font-size: 13px;
+}
+
+.stepHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.stepAction {
+  font-weight: 600;
+  color: var(--color-slate-700);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 12px;
+}
+
+.stepMeta {
+  font-size: 12px;
+  color: var(--color-slate-400);
+}
+
+.stepParams {
+  background: rgba(11, 30, 63, 0.04);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  overflow-x: auto;
+  margin: 0;
+}
+
+.noSteps {
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(11, 30, 63, 0.04);
+  color: var(--color-slate-400);
+  font-size: 13px;
+}
+
+.runActions {
+  margin-top: 16px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 1200px) {
+  .templatesSection {
+    grid-template-columns: 1fr;
+  }
+}

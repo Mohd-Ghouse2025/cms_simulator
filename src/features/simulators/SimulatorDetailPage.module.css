@@ -1,0 +1,1283 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding-top: 0;
+}
+
+.topBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 4px 0 8px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.backLink {
+  border: none;
+  background: transparent;
+  color: var(--color-navy-600);
+  font-weight: 500;
+  font-size: 14px;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.backLink:hover {
+  color: var(--color-navy-900);
+}
+
+.headerInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.headerActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-self: flex-start;
+}
+
+.headerTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.headerTitle {
+  font-size: 22px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--color-navy-900);
+}
+
+.headerSubtext {
+  margin: 0;
+  font-size: 14px;
+  color: var(--color-slate-500);
+}
+
+.connectionBadge {
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.timelineStatusGroup {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.heartbeatStatus {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-slate-500);
+}
+
+.heartbeatDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.8);
+  position: relative;
+}
+
+.heartbeatDotLive {
+  background: #16a34a;
+  animation: heartbeatPulse 1.5s infinite;
+}
+
+.heartbeatDotIdle {
+  background: #94a3b8;
+}
+
+.heartbeatStatusLabel {
+  white-space: nowrap;
+}
+
+@keyframes heartbeatPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(22, 163, 74, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(22, 163, 74, 0);
+  }
+}
+
+.timelineTabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 4px;
+}
+
+.timelineTab {
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  border-radius: 999px;
+  padding: 6px 14px;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-slate-500);
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.timelineTabActive {
+  background: #0f172a;
+  color: #ffffff;
+  border-color: #0f172a;
+}
+
+.timelinePanelHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.timelinePanelBadges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.timelineBadgePill {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  color: var(--color-navy-800);
+}
+
+.timelineBadgeLive {
+  background: rgba(16, 185, 129, 0.22);
+  color: #047857;
+}
+
+.timelineBadgeMuted {
+  background: rgba(148, 163, 184, 0.22);
+  color: #1f2937;
+}
+
+.timelinePanelHint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-slate-500);
+}
+
+.heartbeatList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.heartbeatRow {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: #ffffff;
+}
+
+.heartbeatMeta {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.heartbeatTime {
+  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, Monaco, monospace;
+  font-size: 12px;
+  color: var(--color-slate-500);
+  min-width: 70px;
+}
+
+.heartbeatTitle {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--color-navy-900);
+}
+
+.heartbeatSubtitle {
+  display: block;
+  font-size: 12px;
+  color: var(--color-slate-500);
+}
+
+.heartbeatDetails {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-slate-600);
+}
+
+.heartbeatBadge {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.12);
+  color: #1d4ed8;
+}
+
+.statusWithLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.statusLabel {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-slate-500);
+}
+
+.statusSuccess {
+  background: rgba(34, 197, 94, 0.16);
+  color: #15803d;
+}
+
+.statusInfo {
+  background: rgba(59, 130, 246, 0.16);
+  color: #1d4ed8;
+}
+
+.statusWarning {
+  background: rgba(251, 191, 36, 0.18);
+  color: #b45309;
+}
+
+.statusDanger {
+  background: rgba(239, 68, 68, 0.16);
+  color: #b91c1c;
+}
+
+.statusNeutral {
+  background: rgba(15, 23, 42, 0.12);
+  color: var(--color-navy-900);
+}
+
+.socketStatusLive {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.socketStatusPending {
+  background: #fef9c3;
+  color: #a16207;
+}
+
+.socketStatusError {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.socketStatusIdle {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+.detailGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: 28px 32px;
+  align-items: start;
+  grid-auto-rows: auto;
+}
+
+@media (max-width: 1024px) {
+  .detailGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.overviewCard,
+.connectorsCard {
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.connectorHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.resetStatusBadge {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border-radius: 999px;
+  padding: 4px 12px;
+}
+
+.resetStatusPending {
+  background: rgba(15, 30, 60, 0.08);
+  color: var(--color-slate-600);
+}
+
+.resetStatusSuccess {
+  background: rgba(34, 200, 184, 0.15);
+  color: var(--color-teal-600);
+}
+
+.cardEyebrow {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--color-slate-400);
+}
+
+.cardTitle {
+  margin: 2px 0 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-navy-900);
+}
+
+.toggleRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.cmsWarning {
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 12px;
+  padding: 12px 14px;
+  color: #991b1b;
+  font-size: 14px;
+  font-weight: 500;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.cmsWarning strong {
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.connectionControls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.connectionButton {
+  min-width: 140px;
+}
+
+button.controlToggle {
+  min-width: 160px;
+  min-height: 40px;
+  border-radius: 999px;
+  font-weight: 600;
+  background: #0f172a;
+  border-color: #0f172a;
+  color: #ffffff;
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+
+button.controlToggle span {
+  color: inherit;
+}
+
+button.controlToggle:hover:not(:disabled) {
+  background: #0c1422;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.24);
+}
+
+button.controlToggle:hover:not(:disabled) span {
+  color: inherit;
+}
+
+button.controlToggleStop {
+  background: #fee2e2;
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
+button.controlToggleStop span {
+  color: inherit;
+}
+
+button.controlToggleStop:hover:not(:disabled) {
+  background: #fecaca;
+}
+
+button.controlToggleStop:hover:not(:disabled) span {
+  color: inherit;
+}
+
+button.controlToggle:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.subtleAction {
+  border: none;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-navy-600);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.subtleAction:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.overviewGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(140px, 1fr));
+  gap: 16px;
+}
+
+.overviewItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.statLabel {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-slate-400);
+}
+
+.statValue,
+.infoValue {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-navy-900);
+}
+
+.infoValue {
+  font-size: 18px;
+}
+
+.infoHint {
+  font-size: 12px;
+  color: var(--color-slate-500);
+}
+
+.lastHeartbeat {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(15, 30, 60, 0.08);
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--color-slate-500);
+}
+
+.connectorsList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.connectorChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  background: var(--color-surface-alt);
+}
+
+.connectorChipAvailable {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.connectorChipCharging {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.connectorChipFaulted {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.connectorChipUnavailable {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+.connectorChipReserved {
+  background: #ede9fe;
+  color: #6d28d9;
+}
+
+.connectorId {
+  font-weight: 700;
+}
+
+.connectorMeta {
+  color: var(--color-slate-600);
+}
+
+.connectorStatus {
+  font-weight: 600;
+}
+
+.connectorTable {
+  margin-top: 12px;
+}
+
+.capabilitiesSection {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.capabilitiesLabel {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-slate-400);
+}
+
+.capabilitiesBox {
+  border: 1px solid rgba(15, 30, 60, 0.08);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--color-surface-alt);
+}
+
+.capabilitiesSubLabel {
+  font-size: 12px;
+  color: var(--color-slate-500);
+}
+
+.capabilityChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.capabilityChip {
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--color-surface-alt);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-navy-900);
+}
+
+.capabilitiesCode {
+  margin: 6px 0 0;
+  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, Monaco, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  color: var(--color-navy-900);
+}
+
+.meterCard,
+.graphCard,
+.logsCard {
+  padding: 24px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.stretchCard {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  align-self: stretch;
+}
+
+.timelineSection {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  grid-column: 1 / -1;
+}
+
+.meterInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.infoGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 16px;
+}
+
+.infoItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.statusChip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.statusIdle {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+.statusPending {
+  background: #fef9c3;
+  color: #92400e;
+}
+
+.statusAuthorized {
+  background: #e0e7ff;
+  color: #4338ca;
+}
+
+.statusCharging {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.statusFinishing {
+  background: #cffafe;
+  color: #0e7490;
+}
+
+.statusCompleted {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.statusErrored {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.statusTimeout {
+  background: #ffe4e6;
+  color: #db2777;
+}
+
+.graphPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.graphHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.graphStatus {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.graphStatusLabel {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-navy-900);
+}
+
+.graphStatusMeta {
+  font-size: 12px;
+  color: var(--color-slate-500);
+}
+
+.connectorSwitcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 6px;
+}
+
+.connectorSwitcherEmpty {
+  font-size: 13px;
+  color: var(--color-slate-500);
+}
+
+.connectorToggle {
+  border: 1px solid rgba(15, 30, 60, 0.1);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-navy-600);
+  background: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+}
+
+.connectorToggle:hover {
+  border-color: var(--color-navy-500);
+}
+
+.connectorToggleActive {
+  background: #0f172a;
+  border-color: #0f172a;
+  color: #fff;
+}
+
+.connectorToggleMuted {
+  opacity: 0.6;
+}
+
+.connectorToggleHint {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-slate-500);
+}
+
+.liveGraph {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.graphToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.graphBadgeGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.graphBadge {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 2px 10px;
+  border-radius: 999px;
+  width: fit-content;
+}
+
+.graphBadgeLive {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.graphBadgeIdle {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+.graphBadgeFrozen {
+  background: #ede9fe;
+  color: #5b21b6;
+}
+
+.graphBadgeFault {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.graphConnectorMeta {
+  font-size: 12px;
+  color: var(--color-slate-500);
+}
+
+.graphTabs {
+  display: inline-flex;
+  border: 1px solid rgba(15, 30, 60, 0.12);
+  border-radius: 999px;
+  padding: 2px;
+  gap: 4px;
+}
+
+.graphTab {
+  border: none;
+  background: transparent;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-slate-500);
+  cursor: pointer;
+}
+
+.graphTabActive {
+  background: #0f172a;
+  color: #ffffff;
+}
+
+.graphCanvas {
+  min-height: 280px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 16px;
+  padding: 8px;
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.graphPlaceholder {
+  font-size: 14px;
+  color: var(--color-slate-500);
+}
+
+.graphPlaceholderLarge {
+  border: 1px dashed rgba(15, 23, 42, 0.25);
+  border-radius: 16px;
+  padding: 40px;
+  text-align: center;
+  color: var(--color-slate-500);
+  font-size: 14px;
+}
+
+.graphTooltip {
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 8px 12px;
+  box-shadow: 0 10px 25px rgba(15, 23, 42, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--color-navy-800);
+}
+
+.graphTooltipTitle {
+  font-weight: 600;
+}
+
+.graphFooter {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--color-slate-500);
+}
+
+.graphSummary {
+  font-weight: 600;
+  color: var(--color-navy-800);
+}
+
+.graphMetaBadge {
+  align-self: flex-start;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(124, 58, 237, 0.12);
+  color: #6d28d9;
+  font-weight: 600;
+}
+
+.graphMetaBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.graphMetaBadgeSecondary {
+  background: rgba(15, 23, 42, 0.08);
+  color: var(--color-navy-800);
+}
+
+.graphCaption {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-slate-500);
+}
+
+.logsBody {
+  margin-top: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.telemetryHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 2px 12px;
+  font-size: 13px;
+  color: var(--color-slate-500);
+}
+
+.telemetryTitle {
+  font-weight: 600;
+  color: var(--color-navy-800);
+}
+
+.telemetryHint {
+  font-size: 12px;
+  color: var(--color-slate-400);
+}
+
+.logsList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.logRow {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(15, 30, 60, 0.06);
+}
+
+.logRow:last-child {
+  border-bottom: none;
+}
+
+.logTimestamp {
+  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, Monaco, monospace;
+  font-size: 12px;
+  color: var(--color-slate-500);
+}
+
+.logContext {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.logTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-navy-900);
+}
+
+.logSnapshot {
+  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, Monaco, monospace;
+  font-size: 12px;
+  color: var(--color-slate-500);
+}
+
+.timelineDivider {
+  margin: 16px 0;
+  border-top: 1px dashed rgba(15, 23, 42, 0.12);
+}
+
+.timelineList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.timelineItem {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.timelineMarker {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.timelineMarkerInfo {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.12);
+  color: #1d4ed8;
+}
+
+.timelineMarkerSuccess {
+  border-color: #22c55e;
+  background: rgba(34, 197, 94, 0.12);
+  color: #15803d;
+}
+
+.timelineMarkerWarning {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+  color: #92400e;
+}
+
+.timelineMarkerDanger {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+}
+
+.timelineMarkerNeutral {
+  border-color: #94a3b8;
+  background: rgba(148, 163, 184, 0.12);
+  color: #475569;
+}
+
+.timelineCard {
+  padding: 14px 16px;
+  border: 1px solid rgba(15, 30, 60, 0.08);
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+}
+
+.timelineHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.timelineTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-navy-900);
+}
+
+.timelineSubtitle {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--color-slate-500);
+}
+
+.timelineTimestamp {
+  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, Monaco, monospace;
+  font-size: 12px;
+  color: var(--color-slate-500);
+  white-space: nowrap;
+}
+
+.timelineMetaRow {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.timelineMeta {
+  font-size: 12px;
+  color: var(--color-slate-500);
+}
+
+.timelineBadge {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #475569;
+}
+
+.timelineBadgeInfo {
+  background: rgba(59, 130, 246, 0.15);
+  color: #1d4ed8;
+}
+
+.timelineBadgeSuccess {
+  background: rgba(34, 197, 94, 0.15);
+  color: #15803d;
+}
+
+.timelineBadgeWarning {
+  background: rgba(245, 158, 11, 0.15);
+  color: #92400e;
+}
+
+.timelineBadgeDanger {
+  background: rgba(239, 68, 68, 0.15);
+  color: #b91c1c;
+}
+
+.timelineBadgeNeutral {
+  background: rgba(148, 163, 184, 0.2);
+  color: #475569;
+}
+
+.timelineMetrics {
+  margin: 14px 0 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.timelineMetric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.timelineMetric dt {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-slate-500);
+}
+
+.timelineMetric dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-navy-900);
+}
+
+.timelineMetricMuted {
+  color: var(--color-slate-500);
+  font-weight: 500;
+}
+
+.logPlaceholder,
+.telemetryPlaceholder {
+  font-size: 14px;
+  color: var(--color-slate-500);
+  margin: 16px 0;
+}
+
+.chartTooltip {
+  background: #ffffff;
+  border: 1px solid rgba(15, 30, 60, 0.08);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--color-slate-600);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+}
+
+.errorCard {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+@media (max-width: 1024px) {
+  .lastHeartbeat {
+    flex-direction: column;
+    gap: 4px;
+  }
+}
+.meterHeadline {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.meterBadgeGroup {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.telemetryBadge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+
+.meterContext {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-slate-500);
+}

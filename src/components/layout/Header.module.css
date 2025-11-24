@@ -1,0 +1,131 @@
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  height: var(--header-height);
+  display: flex;
+  align-items: center;
+  background: var(--color-surface-alt);
+  border-bottom: 1px solid var(--panel-border);
+  box-shadow: var(--header-shadow);
+  backdrop-filter: blur(14px);
+  width: 100%;
+}
+
+.inner {
+  width: 100%;
+  padding: 0 var(--shell-gutter-desktop);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  box-sizing: border-box;
+  height: 100%;
+}
+
+.left {
+  flex: 1;
+  min-width: 0;
+}
+
+.search {
+  width: 100%;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+  border-radius: var(--corner-base);
+  border: 1px solid var(--header-search-border);
+  background: var(--surface-neutral);
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.04);
+  transition: border-color var(--transition-medium), box-shadow var(--transition-medium), background var(--transition-medium);
+}
+
+.search:focus-within {
+  border-color: rgba(15, 23, 42, 0.25);
+  box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.08);
+  background: #ffffff;
+}
+
+.search svg {
+  width: 18px;
+  height: 18px;
+  stroke: var(--color-slate-500);
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.searchInput {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-size: 14px;
+  color: var(--color-navy-900);
+}
+
+.searchInput::placeholder {
+  color: var(--color-slate-300);
+}
+
+.searchInput:focus {
+  outline: none;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-left: auto;
+  height: 100%;
+}
+
+.notificationButton {
+  padding: 0;
+}
+
+.badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ef4444;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--header-control-bg);
+}
+
+@media (max-width: 1100px) {
+  .inner {
+    padding: 0 var(--shell-gutter-tablet);
+    gap: 14px;
+  }
+
+  .left {
+    width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .inner {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 12px var(--shell-gutter-mobile);
+  }
+
+  .left {
+    width: 100%;
+  }
+
+  .actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}

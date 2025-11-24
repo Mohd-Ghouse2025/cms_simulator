@@ -1,0 +1,82 @@
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.intro {
+  margin: 0;
+  color: var(--color-slate-500);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.state {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(11, 30, 63, 0.04);
+  color: var(--color-slate-500);
+  font-size: 14px;
+}
+
+.instanceList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.instanceOption {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid rgba(11, 30, 63, 0.15);
+  border-radius: 10px;
+  cursor: pointer;
+  background: white;
+  transition: border 0.15s ease, box-shadow 0.15s ease;
+}
+
+.instanceOption:hover {
+  border-color: rgba(17, 94, 251, 0.4);
+  box-shadow: 0 4px 12px rgba(11, 30, 63, 0.08);
+}
+
+.instanceOption input {
+  margin-top: 4px;
+}
+
+.instanceLabel {
+  font-weight: 600;
+  color: var(--color-slate-600);
+  margin-bottom: 4px;
+}
+
+.instanceMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--color-slate-400);
+  font-size: 12px;
+}
+
+.error {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(220, 38, 38, 0.08);
+  color: #b91c1c;
+  font-size: 13px;
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}

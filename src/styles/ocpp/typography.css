@@ -1,0 +1,33 @@
+h1,
+.heading-xl {
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+h2,
+.heading-lg {
+  font-size: 24px;
+  font-weight: 600;
+}
+
+h3,
+.heading-md {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.text-body {
+  font-size: 16px;
+  font-weight: 400;
+}
+
+.text-sm {
+  font-size: 14px;
+}
+
+.text-xs {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}

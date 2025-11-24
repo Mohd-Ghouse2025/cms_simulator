@@ -1,0 +1,140 @@
+.page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at top, rgba(34, 200, 184, 0.2), transparent), var(--color-surface);
+}
+
+.card {
+  width: min(520px, 90vw);
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--color-slate-500);
+}
+
+.input {
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 15px;
+}
+
+.inputError {
+  border-color: #ef4444;
+}
+
+.helperRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.helperText {
+  font-size: 12px;
+  color: var(--color-slate-400);
+}
+
+.helperMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.previewChip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(11, 30, 63, 0.06);
+  font-size: 12px;
+  color: var(--color-slate-500);
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--color-slate-400);
+}
+
+.actions {
+  display: flex;
+  gap: 12px;
+}
+
+.status {
+  font-size: 13px;
+  color: var(--color-slate-400);
+}
+
+.remembered {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-slate-400);
+}
+
+.rememberedList {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rememberedButton {
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: none;
+  background: rgba(18, 42, 77, 0.08);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.errorText {
+  font-size: 12px;
+  color: #ef4444;
+}
+
+.environmentButton {
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--color-surface);
+  color: var(--color-slate-500);
+  cursor: pointer;
+  line-height: 1.4;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.environmentButtonLocal {
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.5);
+  color: #047857;
+}
+
+.environmentButtonProduction {
+  background: rgba(37, 99, 235, 0.12);
+  border-color: rgba(37, 99, 235, 0.5);
+  color: #1d4ed8;
+}
+
+.environmentButton:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.8);
+  outline-offset: 2px;
+}

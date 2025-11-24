@@ -1,0 +1,30 @@
+.breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-slate-300);
+}
+
+.link {
+  color: var(--color-slate-400);
+}
+
+.link:hover {
+  color: var(--color-teal-300);
+}
+
+.current {
+  color: var(--color-navy-900);
+  font-weight: 600;
+}
+
+.separator {
+  color: var(--color-slate-200);
+}
+
+.segmentWrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
