@@ -53,6 +53,7 @@ import { useSimulatorChannel } from "./hooks/useSimulatorChannel";
 import styles from "./SimulatorDetailPage.module.css";
 import { NormalizedSample, appendSample, normalizeSample, trimWindow } from "./graphHelpers";
 import { EditSimulatorModal, SimulatorUpdatePayload } from "./components/EditSimulatorModal";
+import { connectorStatusTone, formatConnectorStatusLabel, normalizeConnectorStatus } from "./utils/status";
 
 interface DetailResponse extends SimulatedCharger {}
 
@@ -206,19 +207,6 @@ const timelineIconComponents = {
   info: Info
 } as const;
 
-const isConnectorStatus = (value: unknown): value is ConnectorStatus =>
-  typeof value === "string" &&
-  [
-    "AVAILABLE",
-    "PREPARING",
-    "CHARGING",
-    "SUSPENDED_EV",
-    "SUSPENDED_EVSE",
-    "FINISHING",
-    "FAULTED",
-    "UNAVAILABLE"
-  ].includes(value);
-
 const toNumber = (value: unknown): number | undefined => {
   const candidate = Number(value);
   return Number.isFinite(candidate) ? candidate : undefined;
@@ -335,28 +323,6 @@ const timelineToneForStatus = (status?: string): TimelineTone => {
   return "neutral";
 };
 
-const connectorTone = (status?: ConnectorStatus | string): TimelineTone => {
-  if (!status) {
-    return "neutral";
-  }
-  const normalized = status.toString().toUpperCase();
-  switch (normalized) {
-    case "CHARGING":
-      return "success";
-    case "FAULTED":
-      return "danger";
-    case "UNAVAILABLE":
-      return "warning";
-    case "RESERVED":
-    case "PREPARING":
-    case "SUSPENDED_EV":
-    case "SUSPENDED_EVSE":
-      return "info";
-    default:
-      return "neutral";
-  }
-};
-
 const statusToneClassMap: Record<StatusTone, string> = {
   success: styles.statusSuccess,
   info: styles.statusInfo,
@@ -396,7 +362,7 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
   const queryClient = useQueryClient();
   const pushToast = useNotificationStore((state) => state.pushToast);
   const [commandBusy, setCommandBusy] = useState<
-    "start" | "stop" | "reset" | "force-reset" | "connect" | "disconnect" | null
+    "start" | "stop" | "reset" | "force-reset" | "connect" | "disconnect" | "plug" | "unplug" | null
   >(null);
   const [showStartModal, setShowStartModal] = useState(false);
   const [showStopModal, setShowStopModal] = useState(false);
@@ -1289,7 +1255,7 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
           cmsSessionsIndex.byConnectorNumber.get(connectorId)?.[0];
       }
 
-      const connectorStatus = connector?.initial_status ?? "AVAILABLE";
+      const connectorStatus = normalizeConnectorStatus(connector?.initial_status) ?? "AVAILABLE";
       const stateFromConnector: SessionLifecycle = (() => {
         switch (connectorStatus) {
           case "CHARGING":
@@ -1300,6 +1266,13 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
             return "authorized";
           case "UNAVAILABLE":
             return "pending";
+          case "RESERVED":
+            return "pending";
+          case "SUSPENDED_EV":
+          case "SUSPENDED_EVSE":
+            return "authorized";
+          case "FINISHING":
+            return "finishing";
           default:
             return "idle";
         }
@@ -1380,6 +1353,9 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
         connector,
         samples,
         sessionState,
+        connectorStatus,
+        statusLabel: formatConnectorStatusLabel(connectorStatus),
+        statusTone: connectorStatusTone(connectorStatus),
         sessionStatusLabel: getSessionStatusLabel(sessionState),
         sessionStatusClass: getSessionStatusClass(sessionState),
         transactionId,
@@ -1396,7 +1372,6 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
         lastUpdated,
         lastSampleAt: lastSampleIso,
         duration,
-        connectorStatus,
         cmsSession,
         current,
         idTag
@@ -1423,7 +1398,7 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
         format: summary.connector?.format ?? undefined,
         max_kw: summary.connector?.max_kw ?? undefined,
         phase_count: summary.connector?.phase_count ?? undefined,
-        initial_status: (summary.connectorStatus ?? summary.sessionState?.toUpperCase() ?? "AVAILABLE") as ConnectorStatus,
+        initial_status: (summary.connectorStatus ?? "AVAILABLE") as ConnectorStatus,
         metadata: summary.connector?.metadata ?? {}
       })),
     [connectorsSummary]
@@ -1690,25 +1665,16 @@ const activeSession = useMemo(() => {
           if (connector.connector_id !== connectorId) {
             return connector;
           }
-          const normalized = (status ?? connector.initial_status ?? "AVAILABLE").toString().toUpperCase();
-          const allowedStatuses: ConnectorStatus[] = [
-            "AVAILABLE",
-            "PREPARING",
-            "CHARGING",
-            "SUSPENDED_EV",
-            "SUSPENDED_EVSE",
-            "FINISHING",
-            "FAULTED",
-            "UNAVAILABLE"
-          ];
-          const resolvedStatus = allowedStatuses.includes(normalized as ConnectorStatus)
-            ? (normalized as ConnectorStatus)
-            : (connector.initial_status ?? "AVAILABLE");
+          const resolvedStatus =
+            normalizeConnectorStatus(status ?? connector.initial_status ?? "AVAILABLE") ??
+            normalizeConnectorStatus(connector.initial_status) ??
+            (connector.initial_status as ConnectorStatus | undefined) ??
+            "AVAILABLE";
           if (connector.initial_status === resolvedStatus) {
             return connector;
           }
           changed = true;
-          return { ...connector, initial_status: resolvedStatus };
+          return { ...connector, initial_status: resolvedStatus as ConnectorStatus };
         });
         if (!changed) {
           return current;
@@ -1841,10 +1807,11 @@ const activeSession = useMemo(() => {
                   if (!matched) {
                     return connector;
                   }
-                  const status = isConnectorStatus(matched.status)
-                    ? matched.status
-                    : connector.initial_status;
-                  return { ...connector, initial_status: status };
+                  const status =
+                    normalizeConnectorStatus(matched.status) ??
+                    normalizeConnectorStatus(connector.initial_status) ??
+                    connector.initial_status;
+                  return { ...connector, initial_status: (status ?? connector.initial_status) as ConnectorStatus };
                 });
                 return { ...current, connectors };
               }
@@ -1871,13 +1838,17 @@ const activeSession = useMemo(() => {
         case "connector.status": {
           const connectorIdRaw = event.connectorId as number | string | undefined;
           const connectorId = Number(connectorIdRaw);
-          const normalizedStatus = isConnectorStatus(event.status) ? event.status : undefined;
+          const normalizedStatus = normalizeConnectorStatus(event.status);
           if (!Number.isNaN(connectorId)) {
-            patchConnectorStatus(connectorId, normalizedStatus);
+            patchConnectorStatus(
+              connectorId,
+              normalizedStatus ?? (typeof event.status === "string" ? event.status : undefined)
+            );
           }
           const timestamp =
             typeof event.timestamp === "string" ? event.timestamp : new Date().toISOString();
-          const status = normalizedStatus ?? "Available";
+          const status = normalizedStatus ?? "AVAILABLE";
+          const statusLabel = formatConnectorStatusLabel(status);
           const errorCode =
             typeof event.errorCode === "string" && event.errorCode !== "NoError"
               ? event.errorCode
@@ -1887,7 +1858,6 @@ const activeSession = useMemo(() => {
               ? event.vendorErrorCode
               : undefined;
           const isFault = Boolean(errorCode);
-          const statusLabel = status.replace(/_/g, " ");
           const eventKind: TimelineKind = isFault ? "fault" : "connector";
           const subtitle = isFault
             ? vendorErrorCode
@@ -1902,7 +1872,7 @@ const activeSession = useMemo(() => {
             title: isFault ? `Connector #${connectorId} fault` : `Connector #${connectorId} is ${statusLabel}`,
             subtitle,
             badge,
-            tone: isFault ? "danger" : connectorTone(status),
+            tone: isFault ? "danger" : connectorStatusTone(status),
             icon: "plug",
             meta: isFault ? `Status ${statusLabel}` : undefined
           });
@@ -2600,6 +2570,80 @@ const activeSession = useMemo(() => {
     }
   };
 
+  const handlePlugConnector = async (connectorId?: number) => {
+    if (!data) return;
+    const targetConnectorId = Number(connectorId ?? selectedConnectorId ?? data.connectors?.[0]?.connector_id);
+    if (!Number.isFinite(targetConnectorId)) {
+      pushToast({
+        title: "No connector available",
+        description: "Add a connector to the simulator before setting it to Preparing.",
+        level: "warning"
+      });
+      return;
+    }
+    setCommandBusy("plug");
+    try {
+      await api.request(`/api/ocpp-simulator/simulated-chargers/${data.id}/status-update/`, {
+        method: "POST",
+        body: { connectorId: targetConnectorId, status: "Preparing" }
+      });
+      patchConnectorStatus(targetConnectorId, "PREPARING");
+      pushToast({
+        title: "Connector set to Preparing",
+        description: `Connector #${targetConnectorId} is now plugged in.`,
+        level: "success",
+        timeoutMs: 3000
+      });
+      refreshSimulator();
+    } catch (error) {
+      const message = extractErrorMessage(error);
+      pushToast({
+        title: "Plug-in failed",
+        description: message,
+        level: "error"
+      });
+    } finally {
+      setCommandBusy(null);
+    }
+  };
+
+  const handleUnplugConnector = async (connectorId?: number) => {
+    if (!data) return;
+    const targetConnectorId = Number(connectorId ?? selectedConnectorId ?? data.connectors?.[0]?.connector_id);
+    if (!Number.isFinite(targetConnectorId)) {
+      pushToast({
+        title: "No connector available",
+        description: "Add a connector to the simulator before setting it to Available.",
+        level: "warning"
+      });
+      return;
+    }
+    setCommandBusy("unplug");
+    try {
+      await api.request(`/api/ocpp-simulator/simulated-chargers/${data.id}/status-update/`, {
+        method: "POST",
+        body: { connectorId: targetConnectorId, status: "Available" }
+      });
+      patchConnectorStatus(targetConnectorId, "AVAILABLE");
+      pushToast({
+        title: "Connector set to Available",
+        description: `Connector #${targetConnectorId} unplugged.`,
+        level: "success",
+        timeoutMs: 3000
+      });
+      refreshSimulator();
+    } catch (error) {
+      const message = extractErrorMessage(error);
+      pushToast({
+        title: "Unplug failed",
+        description: message,
+        level: "error"
+      });
+    } finally {
+      setCommandBusy(null);
+    }
+  };
+
   const handleFaultInjection = async (payload: {
     connectorId: number;
     faultCode: string;
@@ -2712,18 +2756,12 @@ const activeSession = useMemo(() => {
   }, [simulatorId]);
 
   const resolveConnectorChipClass = (status?: ConnectorStatus | string): string => {
-    switch (status) {
-      case "Charging":
-        return styles.connectorChipCharging;
-      case "Faulted":
-        return styles.connectorChipFaulted;
-      case "Unavailable":
-        return styles.connectorChipUnavailable;
-      case "Reserved":
-        return styles.connectorChipReserved;
-      default:
-        return styles.connectorChipAvailable;
-    }
+    const tone = connectorStatusTone(status);
+    if (tone === "success") return styles.connectorChipCharging;
+    if (tone === "danger") return styles.connectorChipFaulted;
+    if (tone === "warning") return styles.connectorChipUnavailable;
+    if (tone === "info") return styles.connectorChipReserved;
+    return styles.connectorChipAvailable;
   };
 
   if (!Number.isFinite(simulatorId)) {
@@ -2911,7 +2949,7 @@ const activeSession = useMemo(() => {
   const meterContextLabel = primaryConnector
     ? `Connector #${primaryConnector.connectorId} · ${
         primaryConnector.transactionId ? `CMS Tx ${primaryConnector.transactionId}` : "No CMS Tx"
-      } · ${primaryConnector.sessionStatusLabel}`
+      } · ${primaryConnector.statusLabel}`
     : null;
   const totalEnergyDelivered = primaryConnector?.energyKwh ?? 0;
   const renderSimulatorHeader = () => (
@@ -3055,7 +3093,7 @@ const activeSession = useMemo(() => {
             </div>
             <div className={styles.graphStatus}>
               <span className={styles.graphStatusLabel}>
-                {primaryConnector ? primaryConnector.sessionStatusLabel : "Idle"}
+                {primaryConnector ? primaryConnector.statusLabel : "Idle"}
               </span>
               <span className={styles.graphStatusMeta}>
                 {primaryConnector?.transactionId
@@ -3133,10 +3171,12 @@ const activeSession = useMemo(() => {
             <span
               className={clsx(
                 styles.statusChip,
-                primaryConnector ? primaryConnector.sessionStatusClass : styles.statusIdle
+                primaryConnector
+                  ? statusToneClassMap[primaryConnector.statusTone ?? "neutral"]
+                  : statusToneClassMap.neutral
               )}
             >
-              {primaryConnector ? primaryConnector.sessionStatusLabel : "Idle"}
+              {primaryConnector ? primaryConnector.statusLabel : "Idle"}
             </span>
             <span className={styles.telemetryBadge}>
               {graphIsFrozen ? "Frozen snapshot" : "Raw telemetry"}
@@ -3174,25 +3214,53 @@ const activeSession = useMemo(() => {
           <span className={lifecycleBadgeClass}>{lifecycleMeta.label}</span>
           <Button
             size="sm"
+            variant="primary"
+            disabled={commandBusy !== null || !connectorsConfigured}
+            icon={<Plug size={16} />}
+            onClick={() => void handlePlugConnector()}
+            title={
+              connectorsConfigured
+                ? "Sets the active connector to PREPARING to mimic plugging the gun."
+                : "Add a connector to enable plug-in simulation."
+            }
+          >
+            {commandBusy === "plug" ? "Setting Preparing…" : "Plug connector"}
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={commandBusy !== null || !connectorsConfigured}
+            icon={<Power size={16} />}
+            onClick={() => void handleUnplugConnector()}
+            title={
+              connectorsConfigured
+                ? "Sets the active connector to AVAILABLE to mimic unplugging the gun."
+                : "Add a connector to enable plug-out simulation."
+            }
+          >
+            {commandBusy === "unplug" ? "Setting Available…" : "Unplug connector"}
+          </Button>
+          <Button
+            size="sm"
             variant="secondary"
             disabled={commandBusy !== null}
             onClick={() => setShowResetModal(true)}
-            >
-              {commandBusy === "reset" ? "Resetting…" : "Reset Charger"}
-            </Button>
-            <Button
-              size="sm"
-              variant="danger"
-              disabled={commandBusy !== null}
-              onClick={() => setShowForceResetModal(true)}
-            >
-              {commandBusy === "force-reset" ? "Force resetting…" : "Force Reset"}
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={faultButtonDisabled}
-              onClick={() => setShowFaultModal(true)}
+          >
+            {commandBusy === "reset" ? "Resetting…" : "Reset Charger"}
+          </Button>
+          <Button
+            size="sm"
+            variant="danger"
+            disabled={commandBusy !== null}
+            onClick={() => setShowForceResetModal(true)}
+          >
+            {commandBusy === "force-reset" ? "Force resetting…" : "Force Reset"}
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={faultButtonDisabled}
+            onClick={() => setShowFaultModal(true)}
             title={
               faultButtonDisabled
                 ? faultDefinitionsQuery.isLoading
@@ -3221,11 +3289,11 @@ const activeSession = useMemo(() => {
         <>
           <div className={styles.connectorsList}>
             {connectorsSummary.map((summary) => {
-              const status = summary.sessionStatusLabel;
+              const status = summary.statusLabel;
               return (
                 <div
                   key={summary.connectorId}
-                  className={clsx(styles.connectorChip, resolveConnectorChipClass(status))}
+                  className={clsx(styles.connectorChip, resolveConnectorChipClass(summary.connectorStatus))}
                 >
                   <span className={styles.connectorId}>#{summary.connectorId}</span>
                   {summary.connector?.format ? (
@@ -3248,7 +3316,7 @@ const activeSession = useMemo(() => {
               { header: "Format", accessor: (row) => row.connector?.format ?? "—" },
               { header: "Max kW", accessor: (row) => (row.connector?.max_kw ? `${row.connector?.max_kw}` : "—") },
               { header: "Phase", accessor: (row) => row.connector?.phase_count ?? "—" },
-              { header: "Status", accessor: (row) => row.sessionStatusLabel }
+              { header: "Status", accessor: (row) => row.statusLabel }
             ]}
           />
         </>

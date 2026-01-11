@@ -1,8 +1,10 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import clsx from "clsx";
 import { Modal } from "@/components/common/Modal";
 import { Button } from "@/components/common/Button";
 import { SimulatedConnector } from "@/types";
 import styles from "./ActionModal.module.css";
+import { connectorStatusTone, formatConnectorStatusLabel, normalizeConnectorStatus } from "../utils/status";
 
 interface RemoteStopModalProps {
   open: boolean;
@@ -24,6 +26,29 @@ export const RemoteStopModal = ({
   const [connectorId, setConnectorId] = useState<number | undefined>(firstConnectorId);
   const [transactionId, setTransactionId] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const selectedConnector = useMemo(
+    () => connectors.find((connector) => connector.connector_id === connectorId),
+    [connectors, connectorId]
+  );
+  const connectorStatus = useMemo(
+    () => normalizeConnectorStatus(selectedConnector?.initial_status ?? "AVAILABLE"),
+    [selectedConnector]
+  );
+  const statusLabel = useMemo(() => formatConnectorStatusLabel(connectorStatus), [connectorStatus]);
+  const statusToneClass = useMemo(() => {
+    switch (connectorStatusTone(connectorStatus)) {
+      case "success":
+        return styles.toneSuccess;
+      case "warning":
+        return styles.toneWarning;
+      case "danger":
+        return styles.toneDanger;
+      case "info":
+        return styles.toneInfo;
+      default:
+        return styles.toneNeutral;
+    }
+  }, [connectorStatus]);
 
   useEffect(() => {
     if (open) {
@@ -122,6 +147,18 @@ export const RemoteStopModal = ({
             <span className={styles.helper}>
               Sends RemoteStopTransaction for the selected connector&apos;s active session.
             </span>
+            <div className={styles.statusRow}>
+              <div className={styles.statusMeta}>
+                <span className={styles.label}>Status</span>
+                <span className={clsx(styles.statusBadge, statusToneClass)}>
+                  <span className={styles.statusDot} />
+                  {statusLabel}
+                </span>
+              </div>
+              <span className={styles.helper}>
+                Useful to verify the connector is Charging or Finishing before sending a stop.
+              </span>
+            </div>
           </div>
         ) : (
           <div className={styles.field}>

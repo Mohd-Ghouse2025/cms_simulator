@@ -1,6 +1,6 @@
-import { useCallback, useMemo } from "react";
-import { useTenantAuth } from "@/features/auth/useTenantAuth";
-import { useWebSocketChannel, WebSocketStatus } from "@/hooks/useWebSocketChannel";
+import { useEffect, useMemo } from "react";
+import { WebSocketStatus } from "@/hooks/useWebSocketChannel";
+import { useSimulatorChannelContext } from "@/features/simulators/SimulatorChannelProvider";
 
 type SimulatorEvent = {
   type?: string;
@@ -18,79 +18,30 @@ type UseSimulatorChannelResult = {
   error: Event | null;
 };
 
-const buildWebSocketUrl = (
-  baseUrl: string,
-  chargerId: string,
-  token?: string | null,
-  tenantSchema?: string | null
-): string | null => {
-  if (!baseUrl) {
-    return null;
-  }
-  try {
-    const url = new URL(baseUrl);
-    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    const basePath = url.pathname.replace(/\/$/, "");
-    url.pathname = `${basePath}/ws/ocpp-sim/${encodeURIComponent(chargerId)}/`;
-    const params = new URLSearchParams();
-    if (tenantSchema) {
-      params.set("tenant_schema", tenantSchema);
-    }
-    if (token) {
-      params.set("token", token);
-    }
-    const query = params.toString();
-    url.search = query ? `?${query}` : "";
-    url.hash = "";
-    return url.toString();
-  } catch {
-    return null;
-  }
-};
-
 export const useSimulatorChannel = ({
   chargerId,
   enabled = true,
   onEvent
 }: UseSimulatorChannelOptions): UseSimulatorChannelResult => {
-  const { baseUrl, logout, tokens, tenant } = useTenantAuth();
-  const accessToken = tokens?.access ?? null;
+  const { subscribe, getSnapshot } = useSimulatorChannelContext();
 
-  const socketUrl = useMemo(() => {
-    if (!chargerId) {
-      return null;
+  useEffect(() => {
+    if (!enabled || !chargerId) {
+      return;
     }
-    return buildWebSocketUrl(baseUrl, chargerId, accessToken, tenant ?? null);
-  }, [accessToken, baseUrl, chargerId, tenant]);
+    const unsubscribe = subscribe(chargerId, onEvent);
+    return () => {
+      unsubscribe();
+    };
+  }, [chargerId, enabled, onEvent, subscribe]);
 
-  const handleMessage = useCallback(
-    (event: MessageEvent<unknown>) => {
-      if (!onEvent) {
-        return;
-      }
-      const payload = event.data;
-      if (typeof payload === "string") {
-        try {
-          onEvent(JSON.parse(payload) as SimulatorEvent);
-        } catch {
-          onEvent({ type: "log.entry", message: payload, level: "info" });
-        }
-        return;
-      }
-      if (typeof payload === "object" && payload !== null) {
-        onEvent(payload as SimulatorEvent);
-      }
-    },
-    [onEvent]
+  const snapshot = useMemo(
+    () => (chargerId ? getSnapshot(chargerId) : undefined),
+    [chargerId, getSnapshot]
   );
 
-  const { status, error } = useWebSocketChannel({
-    url: socketUrl,
-    shouldConnect: enabled && Boolean(socketUrl),
-    autoReconnect: true,
-    onMessage: handleMessage,
-    onUnauthorized: () => logout({ reason: "expired" })
-  });
-
-  return { status, error };
+  return {
+    status: snapshot?.status ?? "idle",
+    error: snapshot?.error ?? null
+  };
 };

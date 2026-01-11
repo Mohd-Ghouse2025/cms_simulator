@@ -81,3 +81,65 @@
   gap: 12px;
   margin-top: 8px;
 }
+
+.statusRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.statusMeta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.statusDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.toneSuccess {
+  color: #0f766e;
+  border-color: rgba(15, 118, 110, 0.35);
+  background: #e6f7f1;
+}
+
+.toneInfo {
+  color: #2563eb;
+  border-color: rgba(37, 99, 235, 0.3);
+  background: #e8f0ff;
+}
+
+.toneWarning {
+  color: #b45309;
+  border-color: rgba(180, 83, 9, 0.35);
+  background: #fff7ed;
+}
+
+.toneDanger {
+  color: #b91c1c;
+  border-color: rgba(185, 28, 28, 0.35);
+  background: #fef2f2;
+}
+
+.toneNeutral {
+  color: #334155;
+  border-color: rgba(51, 65, 85, 0.3);
+  background: #f8fafc;
+}

@@ -36,6 +36,17 @@ type TenantSession = {
   tenant?: string;
 };
 
+type AuthResponse = {
+  access?: string;
+  refresh?: string;
+  access_token?: string;
+  refresh_token?: string;
+  user?: {
+    email?: string;
+    name?: string;
+  };
+};
+
 type LoginParams = {
   baseUrl: string;
   tenant?: string;
@@ -105,6 +116,15 @@ const toInitials = (value: string) => {
     .split("@")[0]
     .slice(0, 2)
     .toUpperCase();
+};
+
+const mapAuthResponseToTokens = (data: AuthResponse, fallbackRefresh?: string): TokenSet | null => {
+  const accessToken = data?.access ?? data?.access_token;
+  const refreshToken = data?.refresh ?? data?.refresh_token ?? fallbackRefresh;
+  if (!accessToken) {
+    return null;
+  }
+  return { access: accessToken, refresh: refreshToken };
 };
 
 export const TenantAuthProvider = ({ children }: { children: ReactNode }) => {
@@ -253,7 +273,7 @@ export const TenantAuthProvider = ({ children }: { children: ReactNode }) => {
     const tenantRoot = tenantRootFromApi(apiBase);
     let response: Response | null = null;
     try {
-      response = await fetch(`${tenantRoot}/api/token/refresh/`, {
+      response = await fetch(`${tenantRoot}/api/users/refresh_token/`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -269,11 +289,12 @@ export const TenantAuthProvider = ({ children }: { children: ReactNode }) => {
       logout({ reason: "expired" });
       return null;
     }
-    const data = (await response.json()) as TokenSet;
-    const nextTokens: TokenSet = {
-      access: data.access,
-      refresh: data.refresh ?? tokens.refresh,
-    };
+    const data = (await response.json()) as AuthResponse;
+    const nextTokens = mapAuthResponseToTokens(data, tokens.refresh);
+    if (!nextTokens) {
+      logout({ reason: "expired" });
+      return null;
+    }
     setTokens(nextTokens);
     if (profile) {
       persistSession({ baseUrl: apiBase, tokens: nextTokens, profile, tenant: tenantSlug ?? undefined });
@@ -309,12 +330,12 @@ export const TenantAuthProvider = ({ children }: { children: ReactNode }) => {
 
       let tokenResponse: Response;
       try {
-        tokenResponse = await fetch(`${tenantRoot}/api/token/`, {
+        tokenResponse = await fetch(`${tenantRoot}/api/users/login_with_password/`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ username, password }),
+          body: JSON.stringify({ username, password, tenant_code: tenant }),
         });
       } catch (error) {
         console.warn("Token request failed", error);
@@ -322,11 +343,25 @@ export const TenantAuthProvider = ({ children }: { children: ReactNode }) => {
       }
 
       if (!tokenResponse.ok) {
-        const detail = await tokenResponse.text();
+        let detail: string | undefined;
+        try {
+          const json = await tokenResponse.json();
+          detail = json.detail ?? json.error ?? json.message;
+        } catch {
+          try {
+            detail = await tokenResponse.text();
+          } catch {
+            detail = undefined;
+          }
+        }
         throw new Error(detail || "Authentication failed");
       }
 
-      const tokenData = (await tokenResponse.json()) as TokenSet;
+      const tokenData = (await tokenResponse.json()) as AuthResponse;
+      const nextTokens = mapAuthResponseToTokens(tokenData);
+      if (!nextTokens) {
+        throw new Error("No access token returned from login_with_password");
+      }
       const tenantHost = new URL(tenantRoot).host;
       const derivedName = username.split("@")[0] ?? username;
 
@@ -339,16 +374,16 @@ export const TenantAuthProvider = ({ children }: { children: ReactNode }) => {
 
       const session: TenantSession = {
         baseUrl: normalizedBase,
-        tokens: tokenData,
+        tokens: nextTokens,
         profile: nextProfile,
         tenant,
       };
 
-      setTokens(tokenData);
+      setTokens(nextTokens);
       setProfile(nextProfile);
       setTenantSlug(tenant ?? null);
       persistSession(session);
-      const expiry = decodeJwtExpiry(tokenData.access);
+      const expiry = decodeJwtExpiry(nextTokens.access);
       writeSessionExpiryCookie(expiry);
       if (tenant) {
         rememberLastTenantCookie(tenant);

@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useId, useMemo, useState } from "react";
+import clsx from "clsx";
 import { useQuery } from "@tanstack/react-query";
 import { Modal } from "@/components/common/Modal";
 import { Button } from "@/components/common/Button";
@@ -8,6 +9,7 @@ import { useTenantApi } from "@/hooks/useTenantApi";
 import { queryKeys } from "@/lib/queryKeys";
 import { useTenantAuth } from "@/features/auth/useTenantAuth";
 import { getUserIdFromToken } from "@/lib/jwt";
+import { connectorStatusTone, formatConnectorStatusLabel, normalizeConnectorStatus } from "../utils/status";
 
 interface RemoteStartModalProps {
   open: boolean;
@@ -38,6 +40,30 @@ export const RemoteStartModal = ({
   const { tokens } = useTenantAuth();
 
   const userId = useMemo(() => getUserIdFromToken(tokens?.access), [tokens]);
+  const selectedConnector = useMemo(
+    () => connectors.find((connector) => connector.connector_id === connectorId),
+    [connectors, connectorId]
+  );
+  const connectorStatus = useMemo(
+    () => normalizeConnectorStatus(selectedConnector?.initial_status ?? "AVAILABLE"),
+    [selectedConnector]
+  );
+  const statusLabel = useMemo(() => formatConnectorStatusLabel(connectorStatus), [connectorStatus]);
+  const statusTone = useMemo(() => connectorStatusTone(connectorStatus), [connectorStatus]);
+  const statusToneClass = useMemo(() => {
+    switch (statusTone) {
+      case "success":
+        return styles.toneSuccess;
+      case "warning":
+        return styles.toneWarning;
+      case "danger":
+        return styles.toneDanger;
+      case "info":
+        return styles.toneInfo;
+      default:
+        return styles.toneNeutral;
+    }
+  }, [statusTone]);
 
   const {
     data: idTagResponse,
@@ -120,6 +146,18 @@ export const RemoteStartModal = ({
           </select>
           <span className={styles.helper}>
             The CMS will receive a RemoteStartTransaction for the selected connector.
+          </span>
+        </div>
+        <div className={styles.statusRow}>
+          <div className={styles.statusMeta}>
+            <span className={styles.label}>Status</span>
+            <span className={clsx(styles.statusBadge, statusToneClass)}>
+              <span className={styles.statusDot} />
+              {statusLabel}
+            </span>
+          </div>
+          <span className={styles.helper}>
+            Plug the connector before starting — status should read PREPARING once the gun is inserted.
           </span>
         </div>
         <div className={styles.field}>

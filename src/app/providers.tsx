@@ -4,6 +4,7 @@ import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from "@ta
 import type { ReactNode } from "react"
 import { useState } from "react"
 import { TenantAuthProvider } from "@/features/auth/TenantAuthContext"
+import { SimulatorChannelProvider } from "@/features/simulators/SimulatorChannelProvider"
 import { NotificationOutlet } from "@/components/layout/NotificationOutlet"
 import { ApiError } from "@/lib/api"
 import { useNotificationStore } from "@/store/notificationStore"
@@ -56,8 +57,10 @@ export const AppProviders = ({ children }: AppProvidersProps) => {
   return (
     <QueryClientProvider client={queryClient}>
       <TenantAuthProvider>
-        {children}
-        <NotificationOutlet />
+        <SimulatorChannelProvider>
+          {children}
+          <NotificationOutlet />
+        </SimulatorChannelProvider>
       </TenantAuthProvider>
     </QueryClientProvider>
   )

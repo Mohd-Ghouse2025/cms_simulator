@@ -7,6 +7,7 @@ export type ConnectorStatus =
   | "SUSPENDED_EV"
   | "SUSPENDED_EVSE"
   | "FINISHING"
+  | "RESERVED"
   | "FAULTED"
   | "UNAVAILABLE";
 
