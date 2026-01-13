@@ -364,6 +364,7 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
   const [commandBusy, setCommandBusy] = useState<
     "start" | "stop" | "reset" | "force-reset" | "connect" | "disconnect" | "plug" | "unplug" | null
   >(null);
+  const [commandConnectorId, setCommandConnectorId] = useState<number | null>(null);
   const [showStartModal, setShowStartModal] = useState(false);
   const [showStopModal, setShowStopModal] = useState(false);
   const [showFaultModal, setShowFaultModal] = useState(false);
@@ -1387,6 +1388,28 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     sessionsByConnector,
     nowTs
   ]);
+
+  const connectorSelectOptions = useMemo(
+    () =>
+      connectorsSummary.map((summary) => ({
+        id: summary.connectorId,
+        label: `#${summary.connectorId} · ${summary.connector?.format ?? "Connector"}`
+      })),
+    [connectorsSummary]
+  );
+
+  const defaultConnectorId =
+    connectorSelectOptions[0]?.id ?? data?.connectors?.[0]?.connector_id ?? null;
+
+  const connectorTargetSelectId = useMemo(
+    () => `connector-target-${simulatorId}`,
+    [simulatorId]
+  );
+
+  const actionConnectorId = useMemo(
+    () => (selectedConnectorId !== null ? selectedConnectorId : defaultConnectorId),
+    [selectedConnectorId, defaultConnectorId]
+  );
 
   const connectorsConfigured = connectorsSummary.length > 0;
 
@@ -2572,7 +2595,9 @@ const activeSession = useMemo(() => {
 
   const handlePlugConnector = async (connectorId?: number) => {
     if (!data) return;
-    const targetConnectorId = Number(connectorId ?? selectedConnectorId ?? data.connectors?.[0]?.connector_id);
+    const targetConnectorId = Number(
+      connectorId ?? actionConnectorId ?? connectorsSummary[0]?.connectorId ?? data.connectors?.[0]?.connector_id
+    );
     if (!Number.isFinite(targetConnectorId)) {
       pushToast({
         title: "No connector available",
@@ -2581,6 +2606,7 @@ const activeSession = useMemo(() => {
       });
       return;
     }
+    setCommandConnectorId(targetConnectorId);
     setCommandBusy("plug");
     try {
       await api.request(`/api/ocpp-simulator/simulated-chargers/${data.id}/status-update/`, {
@@ -2603,13 +2629,16 @@ const activeSession = useMemo(() => {
         level: "error"
       });
     } finally {
+      setCommandConnectorId(null);
       setCommandBusy(null);
     }
   };
 
   const handleUnplugConnector = async (connectorId?: number) => {
     if (!data) return;
-    const targetConnectorId = Number(connectorId ?? selectedConnectorId ?? data.connectors?.[0]?.connector_id);
+    const targetConnectorId = Number(
+      connectorId ?? actionConnectorId ?? connectorsSummary[0]?.connectorId ?? data.connectors?.[0]?.connector_id
+    );
     if (!Number.isFinite(targetConnectorId)) {
       pushToast({
         title: "No connector available",
@@ -2618,6 +2647,7 @@ const activeSession = useMemo(() => {
       });
       return;
     }
+    setCommandConnectorId(targetConnectorId);
     setCommandBusy("unplug");
     try {
       await api.request(`/api/ocpp-simulator/simulated-chargers/${data.id}/status-update/`, {
@@ -2640,6 +2670,7 @@ const activeSession = useMemo(() => {
         level: "error"
       });
     } finally {
+      setCommandConnectorId(null);
       setCommandBusy(null);
     }
   };
@@ -3212,34 +3243,26 @@ const activeSession = useMemo(() => {
         </div>
         <div className={styles.connectorHeaderActions}>
           <span className={lifecycleBadgeClass}>{lifecycleMeta.label}</span>
-          <Button
-            size="sm"
-            variant="primary"
-            disabled={commandBusy !== null || !connectorsConfigured}
-            icon={<Plug size={16} />}
-            onClick={() => void handlePlugConnector()}
-            title={
-              connectorsConfigured
-                ? "Sets the active connector to PREPARING to mimic plugging the gun."
-                : "Add a connector to enable plug-in simulation."
-            }
-          >
-            {commandBusy === "plug" ? "Setting Preparing…" : "Plug connector"}
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={commandBusy !== null || !connectorsConfigured}
-            icon={<Power size={16} />}
-            onClick={() => void handleUnplugConnector()}
-            title={
-              connectorsConfigured
-                ? "Sets the active connector to AVAILABLE to mimic unplugging the gun."
-                : "Add a connector to enable plug-out simulation."
-            }
-          >
-            {commandBusy === "unplug" ? "Setting Available…" : "Unplug connector"}
-          </Button>
+          {connectorSelectOptions.length ? (
+            <div className={styles.connectorTargetSelector}>
+              <label className={styles.connectorTargetLabel} htmlFor={connectorTargetSelectId}>
+                Action target
+              </label>
+              <select
+                id={connectorTargetSelectId}
+                className={styles.connectorTargetSelect}
+                value={actionConnectorId ?? connectorSelectOptions[0].id ?? ""}
+                onChange={(event) => setSelectedConnectorId(Number(event.target.value))}
+                disabled={commandBusy !== null}
+              >
+                {connectorSelectOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
           <Button
             size="sm"
             variant="secondary"
@@ -3290,10 +3313,28 @@ const activeSession = useMemo(() => {
           <div className={styles.connectorsList}>
             {connectorsSummary.map((summary) => {
               const status = summary.statusLabel;
+              const isSelected = summary.connectorId === actionConnectorId;
+              const plugging = commandBusy === "plug" && commandConnectorId === summary.connectorId;
+              const unplugging = commandBusy === "unplug" && commandConnectorId === summary.connectorId;
               return (
                 <div
                   key={summary.connectorId}
-                  className={clsx(styles.connectorChip, resolveConnectorChipClass(summary.connectorStatus))}
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={isSelected}
+                  onClick={() => setSelectedConnectorId(summary.connectorId)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setSelectedConnectorId(summary.connectorId);
+                    }
+                  }}
+                  className={clsx(
+                    styles.connectorChip,
+                    resolveConnectorChipClass(summary.connectorStatus),
+                    styles.connectorChipInteractive,
+                    isSelected && styles.connectorChipActive
+                  )}
                 >
                   <span className={styles.connectorId}>#{summary.connectorId}</span>
                   {summary.connector?.format ? (
@@ -3303,6 +3344,30 @@ const activeSession = useMemo(() => {
                     <span className={styles.connectorMeta}>{summary.connector.max_kw} kW</span>
                   ) : null}
                   <span className={styles.connectorStatus}>{status}</span>
+                  <div className={styles.connectorActions}>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={plugging || unplugging}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void handlePlugConnector(summary.connectorId);
+                      }}
+                    >
+                      {plugging ? "Plugging…" : "Plug"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={plugging || unplugging}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void handleUnplugConnector(summary.connectorId);
+                      }}
+                    >
+                      {unplugging ? "Unplugging…" : "Unplug"}
+                    </Button>
+                  </div>
                 </div>
               );
             })}
@@ -3363,9 +3428,9 @@ const activeSession = useMemo(() => {
         {renderOverviewCard()}
         {renderConnectorCard()}
         {renderMeterCard()}
-        {renderGraphCard()}
-        {renderTimelineSection()}
-      </section>
+      {renderGraphCard()}
+      {renderTimelineSection()}
+    </section>
       <RemoteStartModal
         open={showStartModal}
         connectors={connectorOptions}

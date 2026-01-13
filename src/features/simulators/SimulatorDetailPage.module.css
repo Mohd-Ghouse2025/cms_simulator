@@ -350,6 +350,35 @@
   justify-content: flex-end;
 }
 
+.connectorTargetSelector {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 170px;
+}
+
+.connectorTargetLabel {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-slate-500);
+}
+
+.connectorTargetSelect {
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 30, 60, 0.12);
+  background: #ffffff;
+  color: var(--color-navy-900);
+  font-weight: 600;
+}
+
+.connectorTargetSelect:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .resetStatusBadge {
   font-size: 11px;
   font-weight: 600;
@@ -537,6 +566,12 @@ button.controlToggle:disabled {
   margin-bottom: 18px;
 }
 
+.connectorActions {
+  display: inline-flex;
+  gap: 8px;
+  margin-left: 10px;
+}
+
 .connectorChip {
   display: inline-flex;
   align-items: center;
@@ -546,6 +581,23 @@ button.controlToggle:disabled {
   font-size: 13px;
   font-weight: 500;
   background: var(--color-surface-alt);
+}
+
+.connectorChipInteractive {
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.connectorChipInteractive:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(34, 200, 184, 0.45);
+}
+
+.connectorChipActive {
+  border-color: rgba(15, 30, 60, 0.18);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.14);
+  transform: translateY(-1px);
 }
 
 .connectorChipAvailable {
