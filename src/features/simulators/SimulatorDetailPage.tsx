@@ -161,6 +161,7 @@ type TelemetryFeedEntry = {
   powerKw: number | null;
   current: number | null;
   energyKwh: number | null;
+  energyRegisterKwh?: number | null;
   status: SessionLifecycle | string;
   statusClass: string;
   statusLabel: string;
@@ -1413,6 +1414,16 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
 
   const connectorsConfigured = connectorsSummary.length > 0;
 
+  const connectorBaselines = useMemo(() => {
+    const map = new Map<number, number>();
+    connectorsSummary.forEach((summary) => {
+      if (typeof summary.meterStartKwh === "number" && Number.isFinite(summary.meterStartKwh)) {
+        map.set(summary.connectorId, summary.meterStartKwh);
+      }
+    });
+    return map;
+  }, [connectorsSummary]);
+
   const connectorOptions = useMemo(
     () =>
       connectorsSummary.map((summary) => ({
@@ -1497,13 +1508,23 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
         const status = runtime?.state ?? "idle";
         const statusClass = getSessionStatusClass(status);
         const statusLabel = getSessionStatusLabel(status);
+        const rawEnergyKwh =
+          typeof sample.energyKwh === "number" && Number.isFinite(sample.energyKwh)
+            ? sample.energyKwh
+            : null;
+        const startKwh = connectorBaselines.get(connectorId);
+        const deliveredKwh =
+          rawEnergyKwh !== null && startKwh !== undefined
+            ? Math.max(rawEnergyKwh - startKwh, 0)
+            : rawEnergyKwh;
         return {
           connectorId,
           timestamp: sample.isoTimestamp,
           transactionId: runtime?.transactionId ?? sample.transactionId,
           powerKw: sample.powerKw,
           current: sample.currentA,
-          energyKwh: sample.energyKwh,
+          energyKwh: deliveredKwh,
+          energyRegisterKwh: rawEnergyKwh,
           status,
           statusClass,
           statusLabel,
@@ -1513,6 +1534,7 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
   }, [
     getSessionStatusClass,
     getSessionStatusLabel,
+    connectorBaselines,
     sessionsByConnector,
     telemetryHistory,
     meterTimelines
@@ -2943,11 +2965,13 @@ const activeSession = useMemo(() => {
         },
         {
           label: "Meter Start",
-          value: `${primaryConnector.meterStartKwh.toFixed(3)} kWh`
+          value: `${primaryConnector.meterStartKwh.toFixed(3)} kWh`,
+          hint: `${(primaryConnector.meterStartKwh * 1000).toFixed(0)} Wh`
         },
         {
           label: "Meter Stop",
-          value: `${primaryConnector.meterStopKwh.toFixed(3)} kWh`
+          value: `${primaryConnector.meterStopKwh.toFixed(3)} kWh`,
+          hint: `${(primaryConnector.meterStopKwh * 1000).toFixed(0)} Wh`
         },
         {
           label: "Duration",
@@ -3826,6 +3850,10 @@ const EventTimelineCard = memo(
                           {entry.powerKw !== null ? `${entry.powerKw.toFixed(2)} kW` : "— kW"} ·{" "}
                           {entry.current !== null ? `${Math.round(entry.current)} A` : "— A"} ·{" "}
                           {entry.energyKwh !== null ? `${entry.energyKwh.toFixed(3)} kWh` : "— kWh"}
+                          {entry.energyRegisterKwh !== null &&
+                          entry.energyRegisterKwh !== entry.energyKwh
+                            ? ` (reg ${entry.energyRegisterKwh.toFixed(3)} kWh)`
+                            : ""}
                         </span>
                       </div>
                       <span className={clsx(styles.statusChip, entry.statusClass)}>

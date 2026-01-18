@@ -55,9 +55,14 @@ export const normalizeSample = (
   previous?: NormalizedSample
 ): NormalizedSample => {
   const { timestamp, isoTimestamp } = resolveTimestamp(input.timestamp);
-  const valueWh = Number.isFinite(input.valueWh)
-    ? Number(input.valueWh)
-    : previous?.valueWh ?? 0;
+  const rawWh = Number.isFinite(input.valueWh) ? Number(input.valueWh) : undefined;
+  // Clamp to previous value to avoid backward energy jumps
+  const valueWh =
+    rawWh !== undefined && Number.isFinite(rawWh)
+      ? previous && rawWh < previous.valueWh
+        ? previous.valueWh
+        : rawWh
+      : previous?.valueWh ?? 0;
   const rawEnergyKwh = Number.isFinite(input.energyKwh)
     ? Number(input.energyKwh)
     : valueWh / 1000;
