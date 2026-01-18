@@ -161,7 +161,7 @@ type TelemetryFeedEntry = {
   powerKw: number | null;
   current: number | null;
   energyKwh: number | null;
-  energyRegisterKwh?: number | null;
+  energyRegisterKwh: number | null;
   status: SessionLifecycle | string;
   statusClass: string;
   statusLabel: string;
