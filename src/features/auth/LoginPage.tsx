@@ -20,7 +20,10 @@ export const LoginPage = () => {
   const [submitting, setSubmitting] = useState(false);
   const [tenantError, setTenantError] = useState<string | null>(null);
   const [preview, setPreview] = useState("");
-  const [apiEnvironment, setApiEnvironment] = useState<ApiEnvironment>(() => getDefaultApiEnvironment());
+  const [apiEnvironment, setApiEnvironment] = useState<ApiEnvironment>(() => {
+    const envFlag = process.env.NEXT_PUBLIC_DEFAULT_ENV;
+    return envFlag && envFlag.toLowerCase() === "local" ? "local" : "remote";
+  });
 
   const tenantPrefilledRef = useRef(Boolean(rememberedTenants[0]));
 
@@ -66,6 +69,14 @@ export const LoginPage = () => {
       setTenantError(error instanceof Error ? error.message : "Invalid tenant");
     }
   }, [tenantName, apiEnvironment]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const detected = getDefaultApiEnvironment();
+    setApiEnvironment(detected);
+  }, []);
 
   const rememberedOptions = useMemo(
     () => rememberedTenants.filter(Boolean),

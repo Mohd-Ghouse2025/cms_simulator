@@ -7,26 +7,22 @@ import { Badge } from "@/components/common/Badge";
 import { Button } from "@/components/common/Button";
 import { useTenantApi } from "@/hooks/useTenantApi";
 import { queryKeys } from "@/lib/queryKeys";
+import { endpoints } from "@/lib/endpoints";
 import { FaultDefinition, FaultInjection } from "@/types";
 import styles from "./FaultsPage.module.css";
-
-interface PaginatedResponse<T> {
-  count: number;
-  results: T[];
-}
 
 export const FaultsPage = () => {
   const api = useTenantApi();
   const definitionsQuery = useQuery({
     queryKey: queryKeys.faultDefinitions,
     queryFn: () =>
-      api.request<PaginatedResponse<FaultDefinition>>("/api/ocpp-simulator/fault-definitions/")
+      api.requestPaginated<FaultDefinition>(endpoints.faultDefinitions)
   });
 
   const scheduleQuery = useQuery({
     queryKey: queryKeys.faultInjections(),
     queryFn: () =>
-      api.request<PaginatedResponse<FaultInjection>>("/api/ocpp-simulator/fault-injections/")
+      api.requestPaginated<FaultInjection>(endpoints.faultInjections)
   });
 
   return (

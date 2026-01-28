@@ -21,6 +21,7 @@ import {
   writeSessionExpiryCookie
 } from "@/lib/authCookies";
 import { useNotificationStore } from "@/store/notificationStore";
+import { endpoints } from "@/lib/endpoints";
 
 type TenantProfile = {
   name: string;
@@ -273,7 +274,7 @@ export const TenantAuthProvider = ({ children }: { children: ReactNode }) => {
     const tenantRoot = tenantRootFromApi(apiBase);
     let response: Response | null = null;
     try {
-      response = await fetch(`${tenantRoot}/api/users/refresh_token/`, {
+      response = await fetch(`${tenantRoot}${endpoints.auth.refreshToken}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -319,7 +320,7 @@ export const TenantAuthProvider = ({ children }: { children: ReactNode }) => {
 
       let healthResponse: Response;
       try {
-        healthResponse = await fetch(`${tenantRoot}/api/health/`);
+        healthResponse = await fetch(`${tenantRoot}${endpoints.auth.health}`);
       } catch (error) {
         console.warn("Tenant health check failed", error);
         throw new Error("Unable to reach tenant API");
@@ -330,7 +331,7 @@ export const TenantAuthProvider = ({ children }: { children: ReactNode }) => {
 
       let tokenResponse: Response;
       try {
-        tokenResponse = await fetch(`${tenantRoot}/api/users/login_with_password/`, {
+        tokenResponse = await fetch(`${tenantRoot}${endpoints.auth.loginWithPassword}`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

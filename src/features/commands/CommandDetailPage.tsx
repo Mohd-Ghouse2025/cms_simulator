@@ -8,6 +8,7 @@ import { Badge } from "@/components/common/Badge";
 import { useTenantApi } from "@/hooks/useTenantApi";
 import { queryKeys } from "@/lib/queryKeys";
 import { getLifecycleStatusMeta } from "@/lib/simulatorLifecycle";
+import { endpoints } from "@/lib/endpoints";
 import { CommandLog, SimulatedCharger } from "@/types";
 import styles from "./CommandDetailPage.module.css";
 
@@ -40,7 +41,7 @@ export const CommandDetailPage = ({ commandId: commandIdProp }: CommandDetailPag
     queryKey: queryKeys.commandLog(commandId),
     enabled: Number.isFinite(commandId),
     queryFn: () =>
-      api.request<CommandLog>(`/api/ocpp-simulator/command-logs/${commandId}/`)
+      api.request<CommandLog>(endpoints.commandLog(commandId))
   });
 
   const simulatorId = commandQuery.data?.simulator;
@@ -48,9 +49,7 @@ export const CommandDetailPage = ({ commandId: commandIdProp }: CommandDetailPag
     queryKey: ["simulator", simulatorId],
     enabled: Boolean(simulatorId),
     queryFn: () =>
-      api.request<SimulatedCharger>(
-        `/api/ocpp-simulator/simulated-chargers/${simulatorId}/`
-      )
+      api.request<SimulatedCharger>(endpoints.simulators.detail(simulatorId as number))
   });
 
   if (commandQuery.isLoading) {

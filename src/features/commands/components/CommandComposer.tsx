@@ -5,17 +5,13 @@ import { Button } from "@/components/common/Button";
 import { useTenantApi } from "@/hooks/useTenantApi";
 import { queryKeys } from "@/lib/queryKeys";
 import { useNotificationStore } from "@/store/notificationStore";
+import { endpoints } from "@/lib/endpoints";
 import { ScenarioRun, SimulatedCharger } from "@/types";
 import styles from "./CommandComposer.module.css";
 
 interface CommandComposerProps {
   open: boolean;
   onClose: () => void;
-}
-
-interface PaginatedResponse<T> {
-  count: number;
-  results: T[];
 }
 
 interface DispatchPayload {
@@ -104,17 +100,16 @@ export const CommandComposer = ({ open, onClose }: CommandComposerProps) => {
   const { data } = useQuery({
     queryKey: queryKeys.simulators(),
     queryFn: () =>
-      api.request<PaginatedResponse<SimulatedCharger>>(
-        "/api/ocpp-simulator/simulated-chargers/",
-        { query: { page_size: 200 } }
-      ),
+      api.requestPaginated<SimulatedCharger>(endpoints.simulators.list, {
+        query: { page_size: 200 }
+      }),
     staleTime: 60_000
   });
 
   const scenarioRunsQuery = useQuery({
     queryKey: queryKeys.scenarioRuns,
     queryFn: () =>
-      api.request<PaginatedResponse<ScenarioRun>>("/api/ocpp-simulator/scenario-runs/", {
+      api.requestPaginated<ScenarioRun>(endpoints.scenarioRuns, {
         query: { page_size: 50 }
       }),
     staleTime: 30_000
@@ -122,7 +117,7 @@ export const CommandComposer = ({ open, onClose }: CommandComposerProps) => {
 
   const dispatchMutation = useMutation({
     mutationFn: async (body: DispatchPayload) =>
-      api.request("/api/ocpp-simulator/command-logs/dispatch/", {
+      api.request(endpoints.commandDispatch, {
         method: "POST",
         body
       }),

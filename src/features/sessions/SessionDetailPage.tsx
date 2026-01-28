@@ -10,6 +10,7 @@ import { Sparkline } from "@/components/charts/Sparkline";
 import { useTenantApi } from "@/hooks/useTenantApi";
 import { queryKeys } from "@/lib/queryKeys";
 import { pickCanonicalTransactionId } from "@/lib/transactions";
+import { endpoints } from "@/lib/endpoints";
 import {
   ChargingSession,
   SessionBillingDetail,
@@ -17,11 +18,6 @@ import {
   SimulatedSession
 } from "@/types";
 import styles from "./SessionDetailPage.module.css";
-
-interface PaginatedResponse<T> {
-  count: number;
-  results: T[];
-}
 
 const METER_HISTORY_LIMIT = 100;
 
@@ -57,7 +53,7 @@ export const SessionDetailPage = ({ sessionId: sessionIdProp }: SessionDetailPag
     queryKey: queryKeys.chargingSession(sessionId),
     enabled: Number.isFinite(sessionId),
     queryFn: () =>
-      api.request<ChargingSession>(`/api/ocpp/charging-sessions/${sessionId}/`)
+      api.request<ChargingSession>(endpoints.cms.chargingSession(sessionId))
   });
 
   const sessionBillingId = sessionQuery.data?.session_billing_id;
@@ -66,7 +62,7 @@ export const SessionDetailPage = ({ sessionId: sessionIdProp }: SessionDetailPag
     enabled: Boolean(sessionBillingId),
     queryFn: () =>
       api.request<SessionBillingDetail>(
-        `/api/users/session-billings/${sessionBillingId}/details/`
+        endpoints.billing.sessionBillingDetail(sessionBillingId as string)
       )
   });
 
@@ -80,8 +76,8 @@ export const SessionDetailPage = ({ sessionId: sessionIdProp }: SessionDetailPag
     queryKey: ["sim-session", transactionKey],
     enabled: Boolean(transactionKey),
     queryFn: async () => {
-      const response = await api.request<PaginatedResponse<SimulatedSession>>(
-        "/api/ocpp-simulator/sessions/",
+      const response = await api.requestPaginated<SimulatedSession>(
+        endpoints.sessions,
         { query: { cms_transaction_key: transactionKey as string, limit: 1 } }
       );
       return response.results[0] ?? null;
@@ -93,8 +89,8 @@ export const SessionDetailPage = ({ sessionId: sessionIdProp }: SessionDetailPag
     queryKey: queryKeys.meterValues({ session: simulatedSessionId, limit: METER_HISTORY_LIMIT }),
     enabled: Boolean(simulatedSessionId),
     queryFn: () =>
-      api.request<PaginatedResponse<SimulatedMeterValue>>(
-        "/api/ocpp-simulator/meter-values/",
+      api.requestPaginated<SimulatedMeterValue>(
+        endpoints.meterValues,
         { query: { session: simulatedSessionId, page_size: METER_HISTORY_LIMIT } }
       )
   });

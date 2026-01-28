@@ -3,8 +3,9 @@ import path from "path"
 
 export default defineConfig({
   test: {
-    environment: "node",
+    environment: "jsdom",
     globals: true,
+    setupFiles: ["./src/test/setupTests.ts"],
     alias: {
       "@": path.resolve(__dirname, "src"),
     },

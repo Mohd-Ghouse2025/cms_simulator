@@ -59,8 +59,13 @@ export interface ConnectorTelemetryHistory {
   cmsSessionId?: number | null;
   transactionId?: string | null;
   state?: string | null;
+   start_time?: string | null;
+   end_time?: string | null;
   meterStartWh?: number | null;
   meterStopWh?: number | null;
+   meterStopFinalWh?: number | null;
+   isFinal?: boolean | null;
+   activeSession?: boolean | null;
   samples: TelemetrySampleSnapshot[];
   finalSample?: TelemetrySampleSnapshot | null;
 }
@@ -70,9 +75,17 @@ export interface ConnectorTelemetrySnapshot {
   sessionId?: number | null;
   transactionId?: string | null;
   state?: string | null;
+   start_time?: string | null;
+   started_at?: string | null;
+   end_time?: string | null;
+   completed_at?: string | null;
   meterStartWh?: number | null;
   meterStopWh?: number | null;
+   meterStopFinalWh?: number | null;
+   isFinal?: boolean | null;
+   activeSession?: boolean | null;
   lastSample?: TelemetrySampleSnapshot | null;
+   lastMeterSample?: TelemetrySampleSnapshot | null;
 }
 
 export interface CmsIdTag {

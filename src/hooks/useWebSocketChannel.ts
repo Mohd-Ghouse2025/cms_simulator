@@ -14,12 +14,15 @@ type UseWebSocketChannelOptions = {
   autoReconnect?: boolean;
   reconnectDelayMs?: number;
   maxReconnectDelayMs?: number;
+  /** optional keep-alive interval in ms; when provided we send a light ping frame */
+  heartbeatIntervalMs?: number;
   onMessage?: (data: MessageEvent<unknown>) => void;
-  onUnauthorized?: () => void;
+  onUnauthorized?: () => void | boolean | Promise<void | boolean>;
 };
 
 const AUTH_CLOSE_CODES = new Set([4001, 4003, 4400, 4401, 4403]);
 const MIN_RECONNECT_DELAY = 1000;
+const JITTER_RATIO = 0.35;
 
 const isCloseEvent = (event: Event | CloseEvent): event is CloseEvent =>
   typeof (event as CloseEvent).code === "number";
@@ -28,7 +31,7 @@ const isUnauthorizedEvent = (event: Event | CloseEvent): boolean => {
   if (!isCloseEvent(event)) {
     return false;
   }
-  if (AUTH_CLOSE_CODES.has(event.code) || event.code === 1008) {
+  if (AUTH_CLOSE_CODES.has(event.code) || event.code === 1008 || event.code === 403) {
     return true;
   }
   const reason = (event.reason ?? "").toLowerCase();
@@ -43,6 +46,7 @@ export const useWebSocketChannel = ({
   reconnectDelayMs = 3000,
   maxReconnectDelayMs,
   onMessage,
+  heartbeatIntervalMs,
   onUnauthorized
 }: UseWebSocketChannelOptions) => {
   const [status, setStatus] = useState<WebSocketStatus>("idle");
@@ -57,9 +61,19 @@ export const useWebSocketChannel = ({
   const reconnectDelayRef = useRef(Math.max(reconnectDelayMs ?? MIN_RECONNECT_DELAY, MIN_RECONNECT_DELAY));
   const baseDelay = Math.max(reconnectDelayMs ?? MIN_RECONNECT_DELAY, MIN_RECONNECT_DELAY);
   const maxDelay = Math.max(
-    maxReconnectDelayMs ?? baseDelay * 8,
+    maxReconnectDelayMs ?? baseDelay * 10,
     baseDelay
   );
+  const heartbeatTimerRef = useRef<number | null>(null);
+  const connectionIdRef = useRef<string>("");
+  if (!connectionIdRef.current) {
+    try {
+      const cryptoApi = typeof crypto !== "undefined" ? crypto : null;
+      connectionIdRef.current = cryptoApi?.randomUUID?.() ?? `ws-${Date.now()}`;
+    } catch {
+      connectionIdRef.current = `ws-${Date.now()}`;
+    }
+  }
 
   useEffect(() => {
     messageHandlerRef.current = onMessage;
@@ -84,7 +98,9 @@ export const useWebSocketChannel = ({
     if (!autoReconnect || reconnectTimer.current || !shouldConnect) {
       return;
     }
-    const delay = Math.min(reconnectDelayRef.current ?? baseDelay, maxDelay);
+    const delayBase = Math.min(reconnectDelayRef.current ?? baseDelay, maxDelay);
+    const jitter = delayBase * JITTER_RATIO;
+    const delay = Math.max(0, delayBase + (Math.random() * jitter * 2 - jitter));
     reconnectTimer.current = window.setTimeout(() => {
       reconnectTimer.current = null;
       reconnectDelayRef.current = Math.min(delay * 2, maxDelay);
@@ -111,6 +127,14 @@ export const useWebSocketChannel = ({
     if (!url || !shouldConnect) {
       return;
     }
+    const existing = socketRef.current;
+    if (
+      existing &&
+      existing.url === url &&
+      (existing.readyState === WebSocket.CONNECTING || existing.readyState === WebSocket.OPEN)
+    ) {
+      return;
+    }
     try {
       manualCloseRef.current = false;
       clearReconnectTimer();
@@ -121,20 +145,50 @@ export const useWebSocketChannel = ({
       socket.onopen = () => {
         reconnectDelayRef.current = baseDelay;
         setStatus("open");
+        if (process.env.NODE_ENV !== "production") {
+          console.debug(`[ws:${connectionIdRef.current}] open ${url}`);
+        }
       };
       socket.onerror = (event) => {
         setStatus("error");
         setError(event);
+        if (process.env.NODE_ENV !== "production") {
+          console.debug(`[ws:${connectionIdRef.current}] error ${url}`, event);
+        }
       };
       socket.onclose = (event) => {
         socketRef.current = null;
+        if (process.env.NODE_ENV !== "production") {
+          console.debug(
+            `[ws:${connectionIdRef.current}] close code=${isCloseEvent(event) ? event.code : "n/a"} reason=${isCloseEvent(event) ? event.reason : ""}`
+          );
+        }
         setStatus("closed");
         if (manualCloseRef.current) {
           manualCloseRef.current = false;
           return;
         }
+        const triggerReconnect = () => {
+          if (manualCloseRef.current) {
+            manualCloseRef.current = false;
+            return;
+          }
+          scheduleReconnect();
+        };
         if (isUnauthorizedEvent(event)) {
-          unauthorizedHandlerRef.current?.();
+          const outcome = unauthorizedHandlerRef.current?.();
+          if (outcome && typeof (outcome as Promise<unknown>).then === "function") {
+            (outcome as Promise<unknown>)
+              .then((shouldReconnect) => {
+                if (shouldReconnect === false) {
+                  return;
+                }
+                triggerReconnect();
+              })
+              .catch(() => triggerReconnect());
+          } else if (outcome !== false) {
+            triggerReconnect();
+          }
           return;
         }
         scheduleReconnect();
@@ -160,6 +214,32 @@ export const useWebSocketChannel = ({
 
   connectRef.current = connect;
 
+  const clearHeartbeat = useCallback(() => {
+    if (heartbeatTimerRef.current) {
+      window.clearInterval(heartbeatTimerRef.current);
+      heartbeatTimerRef.current = null;
+    }
+  }, []);
+
+  const startHeartbeat = useCallback(() => {
+    clearHeartbeat();
+    if (!heartbeatIntervalMs || heartbeatIntervalMs <= 0) {
+      return;
+    }
+    heartbeatTimerRef.current = window.setInterval(() => {
+      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        try {
+          socketRef.current.send(JSON.stringify({ action: "ping", ts: Date.now() }));
+          if (process.env.NODE_ENV !== "production") {
+            console.debug(`[ws:${connectionIdRef.current}] ping`);
+          }
+        } catch {
+          // ignore send failures; close handler will trigger reconnect
+        }
+      }
+    }, Math.max(heartbeatIntervalMs, 5000));
+  }, [clearHeartbeat, heartbeatIntervalMs]);
+
   const send = useCallback(
     (payload: unknown) => {
       if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
@@ -175,15 +255,18 @@ export const useWebSocketChannel = ({
     if (!url || !shouldConnect) {
       disposeSocket();
       clearReconnectTimer();
+      clearHeartbeat();
       setStatus("idle");
       return undefined;
     }
     connect();
+    startHeartbeat();
     return () => {
       clearReconnectTimer();
+      clearHeartbeat();
       disposeSocket();
     };
-  }, [clearReconnectTimer, connect, disposeSocket, shouldConnect, url]);
+  }, [clearReconnectTimer, clearHeartbeat, connect, disposeSocket, shouldConnect, startHeartbeat, url]);
 
   return useMemo(
     () => ({

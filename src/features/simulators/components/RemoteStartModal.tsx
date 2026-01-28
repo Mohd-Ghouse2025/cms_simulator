@@ -9,6 +9,7 @@ import { useTenantApi } from "@/hooks/useTenantApi";
 import { queryKeys } from "@/lib/queryKeys";
 import { useTenantAuth } from "@/features/auth/useTenantAuth";
 import { getUserIdFromToken } from "@/lib/jwt";
+import { endpoints } from "@/lib/endpoints";
 import { connectorStatusTone, formatConnectorStatusLabel, normalizeConnectorStatus } from "../utils/status";
 
 interface RemoteStartModalProps {
@@ -17,11 +18,6 @@ interface RemoteStartModalProps {
   busy?: boolean;
   onCancel: () => void;
   onSubmit: (payload: { connectorId: number; idTag: string }) => Promise<void>;
-}
-
-interface PaginatedResponse<T> {
-  count: number;
-  results: T[];
 }
 
 export const RemoteStartModal = ({
@@ -74,7 +70,7 @@ export const RemoteStartModal = ({
     enabled: open,
     staleTime: 60_000,
     queryFn: async () =>
-      api.request<PaginatedResponse<CmsIdTag>>("/api/ocpp/id-tags/", {
+      api.requestPaginated<CmsIdTag>(endpoints.cms.idTags, {
         query: { page_size: 200, is_blocked: false, ...(userId ? { user_id: userId } : {}) }
       })
   });

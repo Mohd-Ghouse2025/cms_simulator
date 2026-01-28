@@ -32,6 +32,7 @@ type SimulatorChannelContextValue = {
 };
 
 const SimulatorChannelContext = createContext<SimulatorChannelContextValue | null>(null);
+const LAST_CHARGER_KEY = "ocpp-sim-last-charger";
 
 const parseEventPayload = (event: MessageEvent<unknown>): SimulatorEvent => {
   const payload = event.data;
@@ -51,22 +52,26 @@ const parseEventPayload = (event: MessageEvent<unknown>): SimulatorEvent => {
 type BridgeProps = {
   chargerId: string;
   url: string | null;
+  shouldConnect: boolean;
   onStatus: (status: WebSocketStatus, error: Event | null) => void;
   notify: (payload: SimulatorEvent) => void;
-  onUnauthorized: () => void;
+  onUnauthorized: () => Promise<boolean> | boolean;
 };
 
 const SimulatorSocketBridge = ({
   chargerId,
   url,
+  shouldConnect,
   onStatus,
   notify,
   onUnauthorized
 }: BridgeProps) => {
   const { status, error } = useWebSocketChannel({
     url,
-    shouldConnect: Boolean(url),
+    shouldConnect,
     autoReconnect: true,
+    reconnectDelayMs: 1800,
+    heartbeatIntervalMs: 25000,
     onMessage: (event) => notify(parseEventPayload(event)),
     onUnauthorized
   });
@@ -79,13 +84,15 @@ const SimulatorSocketBridge = ({
 };
 
 export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) => {
-  const { baseUrl, tokens, tenant, logout } = useTenantAuth();
+  const { baseUrl, tokens, tenant, logout, refreshTokens, isAuthenticated, hydrated } = useTenantAuth();
   const accessToken = tokens?.access ?? null;
   const tenantSchema = tenant ?? null;
+  const canConnect = hydrated && isAuthenticated && Boolean(accessToken && tenantSchema && baseUrl);
 
   const [snapshots, setSnapshots] = useState<Record<string, ChannelSnapshot>>({});
   const [activeIds, setActiveIds] = useState<string[]>([]);
   const listenersRef = useRef<Map<string, Set<ChannelListener>>>(new Map());
+  const hydratedLastRef = useRef(false);
 
   const handleStatus = useCallback(
     (chargerId: string, status: WebSocketStatus, error: Event | null) => {
@@ -119,7 +126,12 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
       if (!chargerId) {
         return () => {};
       }
-      setActiveIds([chargerId]);
+      setActiveIds((prev) => (prev.includes(chargerId) ? prev : [...prev, chargerId]));
+      try {
+        window.localStorage.setItem(LAST_CHARGER_KEY, chargerId);
+      } catch {
+        // best effort
+      }
       if (listener) {
         const current = listenersRef.current.get(chargerId) ?? new Set<ChannelListener>();
         current.add(listener);
@@ -149,13 +161,34 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
     listenersRef.current.clear();
     setActiveIds([]);
     setSnapshots({});
+    hydratedLastRef.current = false;
+    try {
+      window.localStorage.removeItem(LAST_CHARGER_KEY);
+    } catch {
+      // ignore
+    }
   }, []);
 
   useEffect(() => {
-    if (!accessToken || !baseUrl || !tenantSchema) {
+    if (!canConnect) {
       resetAll();
     }
-  }, [accessToken, baseUrl, tenantSchema, resetAll]);
+  }, [canConnect, resetAll]);
+
+  useEffect(() => {
+    if (!canConnect || hydratedLastRef.current) {
+      return;
+    }
+    hydratedLastRef.current = true;
+    try {
+      const stored = window.localStorage.getItem(LAST_CHARGER_KEY);
+      if (stored) {
+        setActiveIds((prev) => (prev.length ? prev : [stored]));
+      }
+    } catch {
+      // ignore hydration failures
+    }
+  }, [canConnect]);
 
   const contextValue = useMemo<SimulatorChannelContextValue>(
     () => ({
@@ -165,19 +198,35 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
     [subscribe, getSnapshot]
   );
 
+  const handleUnauthorized = useCallback(async () => {
+    const refreshed = await refreshTokens();
+    if (!refreshed) {
+      logout({ reason: "expired" });
+      return false;
+    }
+    return true;
+  }, [logout, refreshTokens]);
+
   return (
     <SimulatorChannelContext.Provider value={contextValue}>
       {children}
-      {activeIds.map((chargerId) => (
-        <SimulatorSocketBridge
-          key={chargerId}
-          chargerId={chargerId}
-          url={buildSimulatorSocketUrl(baseUrl, chargerId, accessToken, tenantSchema)}
-          onStatus={(status, error) => handleStatus(chargerId, status, error)}
-          notify={(payload) => notifyListeners(chargerId, payload)}
-          onUnauthorized={() => logout({ reason: "expired" })}
-        />
-      ))}
+      {activeIds.map((chargerId) => {
+        const url = canConnect
+          ? buildSimulatorSocketUrl(baseUrl, chargerId, accessToken, tenantSchema)
+          : null;
+        const shouldConnect = canConnect && Boolean(url);
+        return (
+          <SimulatorSocketBridge
+            key={chargerId}
+            chargerId={chargerId}
+            url={url}
+            shouldConnect={shouldConnect}
+            onStatus={(status, error) => handleStatus(chargerId, status, error)}
+            notify={(payload) => notifyListeners(chargerId, payload)}
+            onUnauthorized={handleUnauthorized}
+          />
+        );
+      })}
     </SimulatorChannelContext.Provider>
   );
 };

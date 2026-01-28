@@ -9,6 +9,7 @@ import { Button } from "@/components/common/Button";
 import { Badge } from "@/components/common/Badge";
 import { useTenantApi } from "@/hooks/useTenantApi";
 import { queryKeys } from "@/lib/queryKeys";
+import { endpoints } from "@/lib/endpoints";
 import {
   Scenario,
   ScenarioRun,
@@ -19,11 +20,6 @@ import {
 import { useNotificationStore } from "@/store/notificationStore";
 import { RunScenarioModal } from "./components/RunScenarioModal";
 import styles from "./ScenariosPage.module.css";
-
-interface PaginatedResponse<T> {
-  count: number;
-  results: T[];
-}
 
 export const ScenariosPage = () => {
   const api = useTenantApi();
@@ -37,31 +33,29 @@ export const ScenariosPage = () => {
   const templatesQuery = useQuery({
     queryKey: queryKeys.scenarios,
     queryFn: () =>
-      api.request<PaginatedResponse<Scenario>>("/api/ocpp-simulator/scenarios/")
+      api.requestPaginated<Scenario>(endpoints.scenarios)
   });
 
   const runsQuery = useQuery({
     queryKey: queryKeys.scenarioRuns,
     queryFn: () =>
-      api.request<PaginatedResponse<ScenarioRun>>("/api/ocpp-simulator/scenario-runs/")
+      api.requestPaginated<ScenarioRun>(endpoints.scenarioRuns)
   });
 
   const simulatorsQuery = useQuery({
     queryKey: queryKeys.simulators(),
     queryFn: () =>
-      api.request<PaginatedResponse<SimulatedCharger>>(
-        "/api/ocpp-simulator/simulated-chargers/",
-        { query: { page_size: 200 } }
-      )
+      api.requestPaginated<SimulatedCharger>(endpoints.simulators.list, {
+        query: { page_size: 200 }
+      })
   });
 
   const simulatorInstancesQuery = useQuery({
     queryKey: queryKeys.simulatorInstances,
     queryFn: () =>
-      api.request<PaginatedResponse<SimulatorInstance>>(
-        "/api/ocpp-simulator/simulator-instances/",
-        { query: { page_size: 200 } }
-      )
+      api.requestPaginated<SimulatorInstance>(endpoints.simulatorInstances, {
+        query: { page_size: 200 }
+      })
   });
 
   const templates = useMemo(
@@ -133,7 +127,7 @@ export const ScenariosPage = () => {
       if (!selectedScenario) {
         throw new Error("Select a scenario first");
       }
-      return api.request(`/api/ocpp-simulator/scenarios/${selectedScenario.id}/run/`, {
+      return api.request(`${endpoints.scenarios}${selectedScenario.id}/run/`, {
         method: "POST",
         body: { simulator_instance: instanceId }
       });

@@ -24,6 +24,11 @@ export type RequestConfig = {
   responseType?: "json" | "text" | "blob";
 };
 
+export type PaginatedResponse<T> = {
+  count: number;
+  results: T[];
+};
+
 export type RefreshHandler = () => Promise<TokenSet | null>;
 export type LogoutReason = "manual" | "expired" | "forbidden";
 export type LogoutHandler = (options?: { redirect?: boolean; reason?: LogoutReason }) => void;
@@ -71,6 +76,15 @@ export class TenantApiClient {
 
   updateTokens(tokens: TokenSet | null) {
     this.tokens = tokens;
+  }
+
+  requestUrl(path: string, params?: RequestConfig["query"]): string {
+    return this.buildUrl(path, params);
+  }
+
+  async requestPaginated<T>(path: string, config: RequestConfig = {}): Promise<PaginatedResponse<T>> {
+    const raw = await this.request<unknown>(path, config);
+    return normalizePaginatedResponse<T>(raw);
   }
 
   async request<T>(path: string, config: RequestConfig = {}): Promise<T> {
@@ -166,3 +180,23 @@ export class TenantApiClient {
     return url.toString();
   }
 }
+
+export const normalizePaginatedResponse = <T>(data: unknown): PaginatedResponse<T> => {
+  if (Array.isArray(data)) {
+    return { count: data.length, results: data as T[] };
+  }
+  if (data && typeof data === "object") {
+    const payload = data as Record<string, unknown>;
+    if (Array.isArray(payload.results)) {
+      const results = payload.results as T[];
+      const count = typeof payload.count === "number" ? (payload.count as number) : results.length;
+      return { count, results };
+    }
+    if (Array.isArray(payload.features)) {
+      const results = payload.features as T[];
+      const count = typeof payload.count === "number" ? (payload.count as number) : results.length;
+      return { count, results };
+    }
+  }
+  throw new ApiError("Unexpected paginated response shape", 500, data);
+};

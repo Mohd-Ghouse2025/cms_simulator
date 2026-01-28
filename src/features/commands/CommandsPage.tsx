@@ -10,14 +10,10 @@ import { Button } from "@/components/common/Button";
 import { Pagination } from "@/components/common/Pagination";
 import { useTenantApi } from "@/hooks/useTenantApi";
 import { queryKeys } from "@/lib/queryKeys";
+import { endpoints } from "@/lib/endpoints";
 import { CommandLog, SimulatedCharger } from "@/types";
 import { CommandComposer } from "./components/CommandComposer";
 import styles from "./CommandsPage.module.css";
-
-interface PaginatedResponse<T> {
-  count: number;
-  results: T[];
-}
 
 const COMMANDS_PAGE_SIZE = 25;
 
@@ -43,7 +39,7 @@ export const CommandsPage = () => {
   const simulatorsQuery = useQuery({
     queryKey: queryKeys.simulators(),
     queryFn: () =>
-      api.request<PaginatedResponse<SimulatedCharger>>("/api/ocpp-simulator/simulated-chargers/", {
+      api.requestPaginated<SimulatedCharger>(endpoints.simulators.list, {
         query: { page_size: 200 }
       }),
     staleTime: 60_000
@@ -56,7 +52,7 @@ export const CommandsPage = () => {
       page
     }),
     queryFn: () =>
-      api.request<PaginatedResponse<CommandLog>>("/api/ocpp-simulator/command-logs/", {
+      api.requestPaginated<CommandLog>(endpoints.commandLogs, {
         query: {
           ordering: "-created_at",
           page,

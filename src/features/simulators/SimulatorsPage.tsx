@@ -20,14 +20,10 @@ import {
 } from "@/lib/simulatorLifecycle";
 import { useNotificationStore } from "@/store/notificationStore";
 import { ApiError } from "@/lib/api";
+import { endpoints } from "@/lib/endpoints";
 import { SimulatedCharger, SimulatorInstance } from "@/types";
 import { AddSimulatorModal } from "./components/AddSimulatorModal";
 import styles from "./SimulatorsPage.module.css";
-
-interface PaginatedResponse<T> {
-  count: number;
-  results: T[];
-}
 
 type SimulatorAction = "powerOn" | "powerOff" | "connect" | "disconnect";
 
@@ -159,26 +155,22 @@ export const SimulatorsPage = () => {
   const { data, isLoading, isError } = useQuery({
     queryKey: queryKeys.simulators({ page, lifecycle: lifecycleQuery }),
     queryFn: async () =>
-      api.request<PaginatedResponse<SimulatedCharger>>(
-        "/api/ocpp-simulator/simulated-chargers/",
-        {
-          query: {
-            page,
-            page_size: SIMULATOR_PAGE_SIZE,
-            ...(lifecycleQuery ? { lifecycle_state: lifecycleQuery } : {})
-          }
+      api.requestPaginated<SimulatedCharger>(endpoints.simulators.list, {
+        query: {
+          page,
+          page_size: SIMULATOR_PAGE_SIZE,
+          ...(lifecycleQuery ? { lifecycle_state: lifecycleQuery } : {})
         }
-      ),
+      }),
     refetchInterval: 5_000
   });
 
   const instanceQuery = useQuery({
     queryKey: queryKeys.simulatorInstances,
     queryFn: async () =>
-      api.request<PaginatedResponse<SimulatorInstance>>(
-        "/api/ocpp-simulator/simulator-instances/",
-        { query: { page_size: INSTANCE_CACHE_LIMIT } }
-      ),
+      api.requestPaginated<SimulatorInstance>(endpoints.simulatorInstances, {
+        query: { page_size: INSTANCE_CACHE_LIMIT }
+      }),
     refetchInterval: 10_000
   });
 
@@ -219,22 +211,22 @@ export const SimulatorsPage = () => {
       let response: unknown;
       switch (action) {
         case "powerOn":
-          response = await api.request(`/api/ocpp-simulator/simulated-chargers/${simulator.id}/start_process/`, {
+          response = await api.request(endpoints.simulators.startProcess(simulator.id), {
             method: "POST"
           });
           break;
         case "powerOff":
-          response = await api.request(`/api/ocpp-simulator/simulated-chargers/${simulator.id}/stop_process/`, {
+          response = await api.request(endpoints.simulators.stopProcess(simulator.id), {
             method: "POST"
           });
           break;
         case "connect":
-          response = await api.request(`/api/ocpp-simulator/simulated-chargers/${simulator.id}/connect/`, {
+          response = await api.request(endpoints.simulators.connect(simulator.id), {
             method: "POST"
           });
           break;
         case "disconnect":
-          response = await api.request(`/api/ocpp-simulator/simulated-chargers/${simulator.id}/disconnect/`, {
+          response = await api.request(endpoints.simulators.disconnect(simulator.id), {
             method: "POST"
           });
           break;
@@ -667,14 +659,19 @@ const SimulatorRow = ({
         ? "CMS heartbeat missing — reconnect to resume telemetry."
         : "Connect the simulator to the CMS."
     : undefined;
-  const showDisconnectButton = !lifecycleBlocked && cmsConnected;
+  const disconnectLifecycleAllowed =
+    lifecycle === "CONNECTING" || lifecycle === "CONNECTED" || lifecycle === "POWERED_ON";
+  const showDisconnectButton =
+    !lifecycleBlocked && hasActiveInstance && disconnectLifecycleAllowed;
   const disconnectAction: SimulatorAction | null = showDisconnectButton ? "disconnect" : null;
-  const disconnectPending = busyAction === "disconnect" || lifecycle === "CONNECTING";
+  const disconnectPending = busyAction === "disconnect";
   const disconnectLabel = disconnectPending ? "Disconnecting…" : "Disconnect";
-  const disconnectDisabled = !cmsConnected || isBusy || lifecycle === "CONNECTING";
+  const disconnectDisabled = isBusy;
   const disconnectTitle = showDisconnectButton
     ? lifecycle === "CONNECTING"
-      ? "Waiting for the CMS handshake to finish."
+      ? "Cancel the pending CMS connection."
+      : !cmsConnected && lifecycle === "POWERED_ON"
+        ? "Runtime is running without a CMS link — disconnect to clear the lock."
       : undefined
     : undefined;
 

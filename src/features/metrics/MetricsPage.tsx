@@ -6,6 +6,7 @@ import { Card } from "@/components/common/Card";
 import { DataTable } from "@/components/common/DataTable";
 import { useTenantApi } from "@/hooks/useTenantApi";
 import { queryKeys } from "@/lib/queryKeys";
+import { endpoints } from "@/lib/endpoints";
 import { MetricSample } from "@/types";
 import styles from "./MetricsPage.module.css";
 
@@ -52,7 +53,7 @@ export const MetricsPage = () => {
   const { data, isLoading, isError } = useQuery({
     queryKey: queryKeys.metrics,
     queryFn: async () =>
-      api.request<string>("/api/ocpp-simulator/metrics/", {
+      api.request<string>(endpoints.metrics, {
         headers: { Accept: "text/plain" },
         responseType: "text"
       }),

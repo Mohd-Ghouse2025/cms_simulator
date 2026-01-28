@@ -8,6 +8,7 @@ import { Badge } from "@/components/common/Badge";
 import { useTenantApi } from "@/hooks/useTenantApi";
 import { queryKeys } from "@/lib/queryKeys";
 import { getLifecycleStatusMeta } from "@/lib/simulatorLifecycle";
+import { endpoints } from "@/lib/endpoints";
 import {
   CommandLog,
   FaultInjection,
@@ -15,11 +16,6 @@ import {
   SimulatedSession
 } from "@/types";
 import styles from "./DashboardPage.module.css";
-
-interface PaginatedResponse<T> {
-  count: number;
-  results: T[];
-}
 
 interface DashboardSummary {
   simulators: {
@@ -67,47 +63,43 @@ export const DashboardPage = () => {
   const summaryQuery = useQuery({
     queryKey: queryKeys.dashboardSummary,
     queryFn: () =>
-      api.request<DashboardSummary>("/api/ocpp-simulator/dashboard/summary/"),
+      api.request<DashboardSummary>(endpoints.dashboardSummary),
     staleTime: 5_000
   });
 
   const activeSessionsQuery = useQuery({
     queryKey: queryKeys.sessions({ active: true, limit: 8 }),
     queryFn: () =>
-      api.request<PaginatedResponse<SimulatedSession>>(
-        "/api/ocpp-simulator/sessions/",
-        { query: { active: true, limit: 8 } }
-      ),
+      api.requestPaginated<SimulatedSession>(endpoints.sessions, {
+        query: { active: true, limit: 8 }
+      }),
     staleTime: 5_000
   });
 
   const commandLogsQuery = useQuery({
     queryKey: queryKeys.commandLogs({ limit: 8, status: "queued,sent,failed" }),
     queryFn: () =>
-      api.request<PaginatedResponse<CommandLog>>(
-        "/api/ocpp-simulator/command-logs/",
-        { query: { limit: 8, status: "queued,sent,failed" } }
-      ),
+      api.requestPaginated<CommandLog>(endpoints.commandLogs, {
+        query: { limit: 8, status: "queued,sent,failed" }
+      }),
     staleTime: 5_000
   });
 
   const activeFaultsQuery = useQuery({
     queryKey: queryKeys.faultInjections({ status: "active", limit: 5 }),
     queryFn: () =>
-      api.request<PaginatedResponse<FaultInjection>>(
-        "/api/ocpp-simulator/fault-injections/",
-        { query: { status: "active", limit: 5 } }
-      ),
+      api.requestPaginated<FaultInjection>(endpoints.faultInjections, {
+        query: { status: "active", limit: 5 }
+      }),
     staleTime: 10_000
   });
 
   const offlineSimulatorsQuery = useQuery({
     queryKey: queryKeys.simulators({ lifecycle_state: "OFFLINE,ERROR", limit: 5 }),
     queryFn: () =>
-      api.request<PaginatedResponse<SimulatedCharger>>(
-        "/api/ocpp-simulator/simulated-chargers/",
-        { query: { lifecycle_state: "OFFLINE,ERROR", limit: 5 } }
-      ),
+      api.requestPaginated<SimulatedCharger>(endpoints.simulators.list, {
+        query: { lifecycle_state: "OFFLINE,ERROR", limit: 5 }
+      }),
     staleTime: 10_000
   });
 

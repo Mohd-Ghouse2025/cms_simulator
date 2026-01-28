@@ -49,18 +49,14 @@ import { ForceResetModal } from "./components/ForceResetModal";
 import { LiveGraph } from "./components/LiveGraph";
 import { useNotificationStore } from "@/store/notificationStore";
 import { ApiError } from "@/lib/api";
+import { endpoints } from "@/lib/endpoints";
 import { useSimulatorChannel } from "./hooks/useSimulatorChannel";
 import styles from "./SimulatorDetailPage.module.css";
 import { NormalizedSample, appendSample, normalizeSample, trimWindow } from "./graphHelpers";
 import { EditSimulatorModal, SimulatorUpdatePayload } from "./components/EditSimulatorModal";
 import { connectorStatusTone, formatConnectorStatusLabel, normalizeConnectorStatus } from "./utils/status";
 
-interface DetailResponse extends SimulatedCharger {}
-
-interface PaginatedResponse<T> {
-  count: number;
-  results: T[];
-}
+type DetailResponse = SimulatedCharger;
 
 type SimulatorEventPayload = {
   type?: string;
@@ -112,6 +108,9 @@ type SessionRuntime = {
   state: SessionLifecycle;
   meterStartWh?: number;
   meterStopWh?: number;
+  meterStopFinalWh?: number;
+  isFinal?: boolean;
+  activeSession?: boolean;
   pricePerKwh?: number | null;
   maxKw?: number | null;
   cmsSessionId?: number | null;
@@ -161,7 +160,7 @@ type TelemetryFeedEntry = {
   powerKw: number | null;
   current: number | null;
   energyKwh: number | null;
-  energyRegisterKwh: number | null;
+  energyRegisterKwh?: number | null;
   status: SessionLifecycle | string;
   statusClass: string;
   statusLabel: string;
@@ -388,12 +387,14 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
   const telemetryThrottleRef = useRef<Record<number, number>>({});
   const sessionsRef = useRef<Record<number, SessionRuntime>>({});
   const frozenConnectorsRef = useRef<Set<number>>(new Set());
+  const meterStartCacheRef = useRef<Map<string, number>>(new Map());
   const resetFlowRef = useRef<ResetFlowState | null>(null);
   const timelineCardRef = useRef<EventTimelineHandle | null>(null);
   const simulatorId = Number(simulatorIdProp);
   const pendingHistoryFetchesRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     setTelemetryHydrated(false);
+    meterStartCacheRef.current.clear();
   }, [simulatorId]);
   const applyTelemetryHistory = useCallback(
     (updates: Record<number, NormalizedSample[]>) => {
@@ -430,6 +431,41 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     [applyTelemetryHistory]
   );
 
+  const rememberMeterStart = useCallback(
+    (transactionId?: string | null, startWh?: number | null) => {
+      if (!transactionId) {
+        return;
+      }
+      if (typeof startWh !== "number" || Number.isNaN(startWh)) {
+        return;
+      }
+      const existing = meterStartCacheRef.current.get(transactionId);
+      if (existing === undefined || startWh < existing) {
+        meterStartCacheRef.current.set(transactionId, startWh);
+      }
+    },
+    []
+  );
+
+  const resolveMeterStart = useCallback(
+    (transactionId: string | undefined, runtimeStart?: number | null, earliestSample?: number | null) => {
+      if (typeof runtimeStart === "number" && Number.isFinite(runtimeStart)) {
+        rememberMeterStart(transactionId, runtimeStart);
+        return runtimeStart;
+      }
+      const cached = transactionId ? meterStartCacheRef.current.get(transactionId) : undefined;
+      if (typeof cached === "number" && Number.isFinite(cached)) {
+        return cached;
+      }
+      if (typeof earliestSample === "number" && Number.isFinite(earliestSample)) {
+        rememberMeterStart(transactionId, earliestSample);
+        return earliestSample;
+      }
+      return undefined;
+    },
+    [rememberMeterStart]
+  );
+
   const hydrateConnectorHistory = useCallback(
     async (connectorId: number, transactionId?: string | null) => {
       if (!Number.isFinite(connectorId) || connectorId <= 0 || !transactionId) {
@@ -441,8 +477,8 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
       }
       pendingHistoryFetchesRef.current.add(fetchKey);
       try {
-        const response = await api.request<PaginatedResponse<SimulatedMeterValue>>(
-          "/api/ocpp-simulator/meter-values/",
+        const response = await api.requestPaginated<SimulatedMeterValue>(
+          endpoints.meterValues,
           {
             query: {
               simulator: simulatorId,
@@ -600,7 +636,7 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     queryKey: queryKeys.simulatorDetail(simulatorId),
     enabled: Number.isFinite(simulatorId),
     queryFn: async () =>
-      api.request<DetailResponse>(`/api/ocpp-simulator/simulated-chargers/${simulatorId}/`)
+      api.request<DetailResponse>(endpoints.simulators.detail(simulatorId))
   });
   const normalizedLifecycle = normalizeLifecycleState(data?.lifecycle_state) ?? "OFFLINE";
   const [liveLifecycleState, setLiveLifecycleState] = useState(normalizedLifecycle);
@@ -616,17 +652,16 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     queryKey: ["simulator-instance", simulatorId],
     enabled: Number.isFinite(simulatorId),
     queryFn: async () =>
-      api.request<PaginatedResponse<SimulatorInstance>>(
-        "/api/ocpp-simulator/simulator-instances/",
-        { query: { page_size: INSTANCE_HISTORY_LIMIT } }
-      )
+      api.requestPaginated<SimulatorInstance>(endpoints.simulatorInstances, {
+        query: { page_size: INSTANCE_HISTORY_LIMIT }
+      })
   });
 
   const meterValuesQuery = useQuery({
     queryKey: queryKeys.meterValues({ simulator: simulatorId, limit: METER_HISTORY_LIMIT }),
     enabled: !!data && Number.isFinite(simulatorId),
     queryFn: async () =>
-      api.request<PaginatedResponse<SimulatedMeterValue>>("/api/ocpp-simulator/meter-values/", {
+      api.requestPaginated<SimulatedMeterValue>(endpoints.meterValues, {
         query: {
           simulator: simulatorId,
           page_size: METER_HISTORY_LIMIT
@@ -642,7 +677,7 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     queryKey: queryKeys.sessions({ simulator: simulatorId, active: true }),
     enabled: Number.isFinite(simulatorId),
     queryFn: async () =>
-      api.request<PaginatedResponse<SimulatedSession>>("/api/ocpp-simulator/sessions/", {
+      api.requestPaginated<SimulatedSession>(endpoints.sessions, {
         query: { simulator: simulatorId, active: true, limit: 10 }
       }),
     refetchInterval: isLifecycleCharging ? 5_000 : 15_000
@@ -652,7 +687,7 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     queryKey: queryKeys.sessions({ simulator: simulatorId, limit: 20 }),
     enabled: Number.isFinite(simulatorId),
     queryFn: async () =>
-      api.request<PaginatedResponse<SimulatedSession>>("/api/ocpp-simulator/sessions/", {
+      api.requestPaginated<SimulatedSession>(endpoints.sessions, {
         query: { simulator: simulatorId, limit: 20 }
       }),
     staleTime: 30_000,
@@ -663,7 +698,7 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     queryKey: ["cms-connectors", data?.charger_id],
     enabled: Boolean(data?.charger_id),
     queryFn: async () =>
-      api.request<PaginatedResponse<CmsConnector>>("/api/ocpp/connectors/", {
+      api.requestPaginated<CmsConnector>(endpoints.cms.connectors, {
         query: { charger_id: data?.charger_id, page_size: 50 }
       }),
     staleTime: 60_000,
@@ -674,7 +709,7 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     queryKey: ["cms-charging-sessions", data?.charger_id],
     enabled: Boolean(data?.charger_id),
     queryFn: async () =>
-      api.request<PaginatedResponse<CmsChargingSession>>("/api/ocpp/charging-sessions/", {
+      api.requestPaginated<CmsChargingSession>(endpoints.cms.chargingSessions, {
         query: { charger_id: data?.charger_id, page_size: 25 }
       }),
     staleTime: 60_000,
@@ -684,7 +719,7 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
   const faultDefinitionsQuery = useQuery({
     queryKey: queryKeys.faultDefinitions,
     queryFn: async () =>
-      api.request<PaginatedResponse<FaultDefinition>>("/api/ocpp-simulator/fault-definitions/", {
+      api.requestPaginated<FaultDefinition>(endpoints.faultDefinitions, {
         query: { page_size: 100 }
       }),
     staleTime: 120_000
@@ -804,10 +839,15 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
       if (!normalizedSamples.length) {
         return;
       }
+      const historyTransaction =
+        history.transactionId ?? normalizedSamples.at(-1)?.transactionId ?? normalizedSamples[0]?.transactionId;
+      if (historyTransaction) {
+        rememberMeterStart(historyTransaction, history.meterStartWh ?? normalizedSamples[0]?.valueWh);
+      }
       historyBatches[connectorId] = normalizedSamples;
       timelineDraft[connectorId] = {
-        transactionId: history.transactionId ?? normalizedSamples.at(-1)?.transactionId,
-        transactionKey: history.transactionId ?? normalizedSamples.at(-1)?.transactionId,
+        transactionId: historyTransaction,
+        transactionKey: historyTransaction,
         samples: trimWindow(normalizedSamples, TELEMETRY_WINDOW_MS)
       };
     });
@@ -822,17 +862,35 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
         const samples = historyBatches[connectorId];
         const finalSample = samples?.at(-1) ?? null;
         const existing = next[connectorId];
+        const transactionId =
+          history.transactionId ??
+          finalSample?.transactionId ??
+          samples?.[0]?.transactionId ??
+          existing?.transactionId;
+        const meterStartWh = history.meterStartWh ?? existing?.meterStartWh;
+        const meterStopWh =
+          history.meterStopWh ??
+          finalSample?.valueWh ??
+          existing?.meterStopWh ??
+          meterStartWh;
+        const meterStopFinalWh =
+          history.meterStopFinalWh ??
+          (history.isFinal ? meterStopWh : undefined) ??
+          existing?.meterStopFinalWh;
         next[connectorId] = {
           connectorId,
-          transactionId: history.transactionId ?? existing?.transactionId,
-          transactionKey: history.transactionId ?? existing?.transactionKey,
-          cmsTransactionKey: history.transactionId ?? existing?.cmsTransactionKey,
+          transactionId,
+          transactionKey: transactionId ?? existing?.transactionKey,
+          cmsTransactionKey: transactionId ?? existing?.cmsTransactionKey,
           startedAt: existing?.startedAt,
           completedAt: existing?.completedAt,
           updatedAt: existing?.updatedAt,
           state: (history.state as SessionLifecycle) ?? existing?.state ?? "idle",
-          meterStartWh: history.meterStartWh ?? existing?.meterStartWh,
-          meterStopWh: history.meterStopWh ?? existing?.meterStopWh,
+          meterStartWh,
+          meterStopWh,
+          meterStopFinalWh: meterStopFinalWh ?? existing?.meterStopFinalWh,
+          isFinal: history.isFinal ?? existing?.isFinal ?? Boolean(history.end_time),
+          activeSession: history.activeSession ?? existing?.activeSession ?? false,
           pricePerKwh: existing?.pricePerKwh ?? data?.price_per_kwh ?? null,
           maxKw: existing?.maxKw ?? null,
           finalSample,
@@ -842,7 +900,7 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
       return next;
     });
     setTelemetryHydrated(true);
-  }, [telemetryHistoryMap, data?.price_per_kwh, applyTelemetryHistory, telemetryHydrated]);
+  }, [telemetryHistoryMap, data?.price_per_kwh, applyTelemetryHistory, telemetryHydrated, rememberMeterStart]);
 
   useEffect(() => {
     if (!telemetrySnapshotMap.size) {
@@ -852,7 +910,8 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     setSessionsByConnector((current) => {
       const next = { ...current };
       telemetrySnapshotMap.forEach((snapshot, connectorId) => {
-        const sample = buildSnapshotSample(connectorId, snapshot.lastSample);
+        const samplePayload = snapshot.lastMeterSample ?? snapshot.lastSample;
+        const sample = buildSnapshotSample(connectorId, samplePayload);
         if (sample) {
           if (!snapshotHistory[connectorId]) {
             snapshotHistory[connectorId] = [];
@@ -860,19 +919,34 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
           snapshotHistory[connectorId].push(sample);
         }
         const existing = next[connectorId];
+        const transactionId =
+          snapshot.transactionId ?? sample?.transactionId ?? existing?.transactionId;
+        rememberMeterStart(transactionId, snapshot.meterStartWh ?? sample?.valueWh);
         const resolvedState = (snapshot.state as SessionLifecycle) ?? existing?.state ?? "idle";
+        const startedAt =
+          snapshot.start_time ?? snapshot.started_at ?? existing?.startedAt;
+        const completedAt = snapshot.end_time ?? snapshot.completed_at ?? existing?.completedAt;
+        const meterStopWh =
+          snapshot.meterStopWh ?? sample?.valueWh ?? existing?.meterStopWh ?? snapshot.meterStartWh;
+        const meterStopFinalWh =
+          snapshot.meterStopFinalWh ??
+          (snapshot.isFinal ? meterStopWh : undefined) ??
+          existing?.meterStopFinalWh;
         next[connectorId] = {
           connectorId,
-          transactionId: snapshot.transactionId ?? existing?.transactionId,
-          transactionKey: snapshot.transactionId ?? existing?.transactionKey,
-          cmsTransactionKey: snapshot.transactionId ?? existing?.cmsTransactionKey,
+          transactionId,
+          transactionKey: transactionId ?? existing?.transactionKey,
+          cmsTransactionKey: transactionId ?? existing?.cmsTransactionKey,
           idTag: existing?.idTag,
-          startedAt: existing?.startedAt,
-          completedAt: existing?.completedAt,
-          updatedAt: existing?.updatedAt,
+          startedAt,
+          completedAt,
+          updatedAt: completedAt ?? startedAt ?? existing?.updatedAt,
           state: resolvedState,
           meterStartWh: snapshot.meterStartWh ?? existing?.meterStartWh,
-          meterStopWh: snapshot.meterStopWh ?? existing?.meterStopWh,
+          meterStopWh,
+          meterStopFinalWh: meterStopFinalWh ?? existing?.meterStopFinalWh,
+          isFinal: snapshot.isFinal ?? existing?.isFinal ?? Boolean(completedAt),
+          activeSession: snapshot.activeSession ?? existing?.activeSession ?? false,
           pricePerKwh: existing?.pricePerKwh ?? data?.price_per_kwh ?? null,
           maxKw: existing?.maxKw ?? null,
           cmsSessionId: existing?.cmsSessionId ?? null,
@@ -888,18 +962,21 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
         const recordedSamples = snapshotHistory[connectorId];
         const sample =
           recordedSamples?.[recordedSamples.length - 1] ??
-          buildSnapshotSample(connectorId, snapshot.lastSample);
+          buildSnapshotSample(connectorId, snapshot.lastMeterSample ?? snapshot.lastSample);
         if (!sample) {
           return;
         }
         const existing = next[connectorId];
-        if (existing && existing.samples.length) {
-          return;
-        }
+        const transactionId =
+          snapshot.transactionId ?? sample.transactionId ?? existing?.transactionId;
+        const shouldReplace =
+          !existing ||
+          existing.transactionId !== transactionId ||
+          !existing.samples.length;
         next[connectorId] = {
-          transactionId: snapshot.transactionId ?? existing?.transactionId,
-          transactionKey: snapshot.transactionId ?? existing?.transactionKey,
-          samples: [sample]
+          transactionId,
+          transactionKey: transactionId ?? existing?.transactionKey,
+          samples: shouldReplace ? [sample] : existing.samples
         };
       });
       return next;
@@ -907,7 +984,7 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     if (Object.keys(snapshotHistory).length) {
       applyTelemetryHistory(snapshotHistory);
     }
-  }, [telemetrySnapshotMap, data?.price_per_kwh, applyTelemetryHistory]);
+  }, [telemetrySnapshotMap, data?.price_per_kwh, applyTelemetryHistory, rememberMeterStart]);
 
   useEffect(() => {
     const sessions = cmsSessionsQuery.data?.results ?? [];
@@ -1073,6 +1150,7 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
           const meterStartWh = session.meter_start_wh ?? existing?.meterStartWh;
           const meterStopWh = session.meter_stop_wh ?? existing?.meterStopWh;
           const state = (session.state ?? existing?.state ?? "idle") as SessionLifecycle;
+          rememberMeterStart(transactionId, meterStartWh);
           const existingStart = existing?.startedAt ? Date.parse(existing.startedAt) : null;
           const candidateStart = startedAt ? Date.parse(startedAt) : null;
           if (existing && existingStart !== null && candidateStart !== null && candidateStart < existingStart) {
@@ -1107,6 +1185,11 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
             state,
             meterStartWh,
             meterStopWh,
+            meterStopFinalWh:
+              (state === "completed" ? meterStopWh : undefined) ??
+              existing?.meterStopFinalWh,
+            isFinal: state === "completed" || existing?.isFinal,
+            activeSession: state === "authorized" || state === "charging" || state === "finishing",
             pricePerKwh: data?.price_per_kwh ?? existing?.pricePerKwh ?? null,
             maxKw: connectorInfo?.max_kw ?? existing?.maxKw ?? null
           };
@@ -1114,7 +1197,7 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
         return next;
       });
     },
-    [data?.price_per_kwh, resolveConnectorNumber, simulatorConnectorByPk]
+    [data?.price_per_kwh, resolveConnectorNumber, simulatorConnectorByPk, rememberMeterStart]
   );
 
   useEffect(() => {
@@ -1208,6 +1291,12 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     connectors.forEach((connector) => {
       connectorsByNumber.set(connector.connector_id, connector);
     });
+    const maxFinite = (values: Array<number | null | undefined>) => {
+      const numbers = values.filter(
+        (val): val is number => typeof val === "number" && Number.isFinite(val)
+      );
+      return numbers.length ? Math.max(...numbers) : undefined;
+    };
     const connectorIds = new Set<number>();
     connectorsByNumber.forEach((_, id) => connectorIds.add(id));
     Object.keys(meterTimelines).forEach((key) => {
@@ -1290,34 +1379,52 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
         latestSample?.transactionId ??
         cmsTransactionId;
 
-      const cmsMeterStartWh = cmsSession?.meter_start;
-      const runtimeMeterStartWh = runtime?.meterStartWh ?? samples[0]?.valueWh ?? undefined;
-      const resolvedStartWh =
-        cmsMeterStartWh ??
-        runtimeMeterStartWh ??
-        samples[0]?.valueWh ??
-        runtime?.meterStopWh ??
-        cmsSession?.meter_stop ??
-        0;
+      const runtimeMeterStartWh = runtime?.meterStartWh;
+      const earliestSampleWh = samples[0]?.valueWh ?? null;
+      const meterStartWh = resolveMeterStart(transactionId, runtimeMeterStartWh, earliestSampleWh) ?? 0;
+
+      const runtimeStopWh = runtime?.meterStopWh;
+      const runtimeFinalWh = runtime?.meterStopFinalWh;
+      const cmsMeterStopWh = cmsSession?.meter_stop;
       const latestSampleWh = latestSample?.valueWh;
-      const stopCandidates = [
-        runtime?.meterStopWh,
-        cmsSession?.meter_stop,
+      const isCompleted =
+        runtime?.isFinal ||
+        runtime?.state === "completed" ||
+        Boolean(runtime?.completedAt ?? cmsSession?.end_time);
+      const activeSession =
+        runtime?.activeSession ??
+        (!isCompleted &&
+          (runtime?.state === "authorized" ||
+            runtime?.state === "charging" ||
+            runtime?.state === "finishing"));
+
+      const activeStop = maxFinite([
+        runtimeStopWh,
         latestSampleWh,
-        resolvedStartWh
-      ].filter((value): value is number => typeof value === "number");
-      const meterStopWh = stopCandidates.length ? Math.max(...stopCandidates) : resolvedStartWh;
-      const meterStartWh = Math.min(resolvedStartWh, meterStopWh);
+        cmsMeterStopWh,
+        meterStartWh
+      ]);
+      const finalStop = maxFinite([
+        runtimeFinalWh,
+        runtimeStopWh,
+        latestSampleWh,
+        cmsMeterStopWh,
+        meterStartWh
+      ]);
+      const meterStopWh = (isCompleted ? finalStop : activeStop) ?? meterStartWh;
+      const meterStopFinalWh = isCompleted ? (finalStop ?? meterStopWh) : undefined;
       const energyWh = Math.max(meterStopWh - meterStartWh, 0);
       const energyKwh = Number((energyWh / 1000).toFixed(3));
 
       const sessionState: SessionLifecycle =
         runtime?.state ??
-        telemetryState ??
+        (activeSession ? telemetryState ?? runtime?.state ?? "charging" : undefined) ??
         (cmsSession && !cmsSession.end_time ? "charging" : undefined) ??
         stateFromConnector;
       const startedAt = runtime?.startedAt ?? cmsSession?.start_time ?? samples[0]?.isoTimestamp;
-      const completedAt = runtime?.completedAt ?? (cmsSession?.end_time ?? undefined);
+      const completedAt =
+        runtime?.completedAt ??
+        (cmsSession?.end_time ?? (isCompleted ? runtime?.lastSampleAt ?? latestSample?.isoTimestamp ?? undefined : undefined));
       const duration = formatDuration(
         startedAt,
         sessionState === "charging" || sessionState === "authorized" ? undefined : completedAt
@@ -1369,6 +1476,8 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
         energyKwh,
         meterStartKwh,
         meterStopKwh,
+        meterStopFinalWh: meterStopFinalWh ?? (isCompleted ? meterStopWh : undefined),
+        isFinal: isCompleted,
         deltaKwh,
         powerKw,
         lastUpdated,
@@ -1387,7 +1496,8 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     getSessionStatusLabel,
     meterTimelines,
     sessionsByConnector,
-    nowTs
+    nowTs,
+    resolveMeterStart
   ]);
 
   const connectorSelectOptions = useMemo(
@@ -1655,7 +1765,7 @@ const activeSession = useMemo(() => {
       setEditBusy(true);
       try {
         const updated = await api.request<DetailResponse>(
-          `/api/ocpp-simulator/simulated-chargers/${data.id}/`,
+          endpoints.simulators.detail(data.id),
           {
             method: "PATCH",
             body: payload
@@ -1736,8 +1846,12 @@ const activeSession = useMemo(() => {
         const key = connectorId.toString();
         const snapshot = { ...(current.telemetrySnapshot ?? {}) };
         const existing = snapshot[key] ?? { connectorId };
-        const merged = { ...existing, ...updates };
-        snapshot[key] = merged;
+        const existingTx = (existing as ConnectorTelemetrySnapshot | undefined)?.transactionId;
+        const nextPayload =
+          updates.transactionId && existingTx && updates.transactionId !== existingTx
+            ? { connectorId, ...updates }
+            : { ...existing, ...updates };
+        snapshot[key] = nextPayload;
         return { ...current, telemetrySnapshot: snapshot };
       });
     },
@@ -1755,7 +1869,8 @@ const activeSession = useMemo(() => {
       powerKw: sample.powerKw,
       currentA: sample.currentA,
       voltageV: sample.voltageV,
-      deltaWh: sample.deltaWh
+      deltaWh: sample.deltaWh,
+      transactionId: sample.transactionId
     };
   }, []);
 
@@ -1990,13 +2105,6 @@ const activeSession = useMemo(() => {
             if (!Number.isFinite(valueWh)) {
               return;
             }
-            if (frozenConnectorsRef.current.has(connectorId)) {
-              return;
-            }
-            const runtimeSnapshot = sessionsRef.current[connectorId];
-            if (runtimeSnapshot?.state === "completed") {
-              return;
-            }
             const rawTransactionId = event.transactionId as string | number | undefined;
             const transactionId = resolveEventTransactionId(rawTransactionId);
             const deltaWh = toNumber(event.deltaWh);
@@ -2011,105 +2119,164 @@ const activeSession = useMemo(() => {
                 : typeof event.timestamp === "string"
                   ? event.timestamp
                   : new Date().toISOString();
-            let recordedSample: NormalizedSample | null = null;
+            const sampleTimestampMs = Date.parse(sampleTimestamp);
+            const runtimeSnapshot = sessionsRef.current[connectorId];
+            const existingTimeline = meterTimelines[connectorId];
+            const existingTx = runtimeSnapshot?.transactionId ?? existingTimeline?.transactionId;
+            const lastSampleIso =
+              runtimeSnapshot?.lastSampleAt ??
+              runtimeSnapshot?.finalSample?.isoTimestamp ??
+              existingTimeline?.samples?.at(-1)?.isoTimestamp ??
+              null;
+            const lastSampleTs = lastSampleIso ? Date.parse(lastSampleIso) : null;
+            const isFrozen = frozenConnectorsRef.current.has(connectorId);
+            const isDifferentTx = Boolean(transactionId && existingTx && transactionId !== existingTx);
+            const shouldSwitchToNewTx =
+              transactionId &&
+              isDifferentTx &&
+              (
+                !runtimeSnapshot ||
+                runtimeSnapshot.state === "completed" ||
+                runtimeSnapshot.isFinal ||
+                isFrozen ||
+                (lastSampleTs !== null && sampleTimestampMs && sampleTimestampMs > lastSampleTs)
+              );
+            if (transactionId && isDifferentTx && !shouldSwitchToNewTx) {
+              return;
+            }
+            if (isFrozen && !shouldSwitchToNewTx && (!transactionId || transactionId === existingTx)) {
+              return;
+            }
+            const transactionToUse = transactionId ?? existingTimeline?.transactionId ?? existingTx;
+            const previousSample = shouldSwitchToNewTx ? undefined : existingTimeline?.samples?.at(-1);
+            const sample = normalizeSample(
+              {
+                connectorId,
+                timestamp: sampleTimestamp,
+                valueWh,
+                deltaWh,
+                intervalSeconds,
+                powerKw,
+                currentA,
+                voltageV,
+                energyKwh,
+                transactionId: transactionToUse
+              },
+              previousSample
+            );
             setMeterTimelines((current) => {
               const existing = current[connectorId];
-              const transactionToUse = transactionId ?? existing?.transactionId;
               const samples = existing?.samples ?? [];
-              const previousSample = samples.at(-1);
-              const normalizedSample = normalizeSample(
-                {
-                  connectorId,
-                  timestamp: sampleTimestamp,
-                  valueWh,
-                  deltaWh,
-                  intervalSeconds,
-                  powerKw,
-                  currentA,
-                  voltageV,
-                  energyKwh,
-                  transactionId: transactionToUse
-                },
-                previousSample
-              );
-              recordedSample = normalizedSample;
-              const appended = appendSample(samples, normalizedSample);
+              const baseSamples = shouldSwitchToNewTx ? [] : samples;
+              const appended = appendSample(baseSamples, sample);
               const updatedSamples = trimWindow(appended, TELEMETRY_WINDOW_MS);
+              const nextTransaction = transactionToUse ?? existing?.transactionId ?? existingTx;
               return {
                 ...current,
                 [connectorId]: {
-                  transactionId: transactionToUse,
-                  transactionKey: transactionToUse ?? existing?.transactionKey,
+                  transactionId: nextTransaction,
+                  transactionKey: nextTransaction ?? existing?.transactionKey,
                   samples: updatedSamples
                 }
               };
             });
-            if (transactionId) {
-              setSessionsByConnector((current) => {
-                const existing = current[connectorId];
-                if (!existing) {
-                  return current;
-                }
-                if (transactionId && existing.transactionId && existing.transactionId !== transactionId) {
-                  return current;
-                }
-                return {
-                  ...current,
-                  [connectorId]: {
-                    ...existing,
-                    transactionId: transactionId ?? existing.transactionId,
-                    transactionKey: transactionId ?? existing.transactionKey,
-                    cmsTransactionKey: transactionId ?? existing.cmsTransactionKey
-                  }
-                };
-              });
+            const resolvedTransaction = transactionId ?? sample.transactionId ?? existingTx;
+            if (resolvedTransaction) {
+              rememberMeterStart(
+                resolvedTransaction,
+                meterStartCacheRef.current.get(resolvedTransaction) ?? sample.valueWh
+              );
             }
-            if (recordedSample) {
-              const processedSample: NormalizedSample = recordedSample;
-              setSessionsByConnector((current) => {
-                const existing = current[connectorId];
-                if (!existing) {
-                  return current;
-                }
+            setSessionsByConnector((current) => {
+              const existing = current[connectorId];
+              const meterStartWh =
+                resolveMeterStart(resolvedTransaction, existing?.meterStartWh, sample.valueWh) ??
+                sample.valueWh ??
+                existing?.meterStartWh ??
+                0;
+              if (
+                !existing ||
+                (shouldSwitchToNewTx && resolvedTransaction && existing.transactionId !== resolvedTransaction)
+              ) {
                 return {
                   ...current,
                   [connectorId]: {
-                    ...existing,
-                    finalSample: processedSample,
-                    lastSampleAt: processedSample.isoTimestamp
+                    connectorId,
+                    transactionId: resolvedTransaction ?? existing?.transactionId,
+                    transactionKey: resolvedTransaction ?? existing?.transactionKey,
+                    cmsTransactionKey: resolvedTransaction ?? existing?.cmsTransactionKey,
+                    idTag: existing?.idTag,
+                    startedAt: sample.isoTimestamp,
+                    completedAt: undefined,
+                    updatedAt: sample.isoTimestamp,
+                    state: "charging",
+                    meterStartWh,
+                    meterStopWh: sample.valueWh,
+                    meterStopFinalWh: undefined,
+                    isFinal: false,
+                    activeSession: true,
+                    pricePerKwh: existing?.pricePerKwh ?? data?.price_per_kwh ?? null,
+                    maxKw: existing?.maxKw ?? null,
+                    cmsSessionId: existing?.cmsSessionId ?? null,
+                    finalSample: sample,
+                    lastSampleAt: sample.isoTimestamp
                   }
                 };
-              });
-              appendTelemetrySample(connectorId, processedSample);
-              if (shouldRecordTelemetry(connectorId, processedSample.isoTimestamp)) {
-                const runtimeSnapshot = sessionsRef.current[connectorId];
-                const telemetryMetrics: TimelineMetric[] = [];
-                const powerLabel = `${processedSample.powerKw.toFixed(2)} kW`;
-                const currentLabel = `${processedSample.currentA.toFixed(1)} A`;
-                const energyValue = processedSample.energyKwh;
-                telemetryMetrics.push({
-                  label: "Energy",
-                  value: `${formatNumber(energyValue, { digits: 3 })} kWh`
-                });
-                telemetryMetrics.push({ label: "Power", value: powerLabel });
-                telemetryMetrics.push({ label: "Current", value: currentLabel, muted: true });
-                const runtimeState = runtimeSnapshot?.state;
-                const runtimeStateLabel = runtimeState
-                  ? getSessionStatusLabel(runtimeState)
-                  : "Telemetry";
-                const txLabel = transactionId ?? runtimeSnapshot?.transactionId;
-                pushTimelineEvent({
-                  dedupeKey: `meter:${connectorId}:${processedSample.isoTimestamp}`,
-                  timestamp: processedSample.isoTimestamp,
-                  kind: "meter",
-                  title: "Telemetry update",
-                  subtitle: `Connector #${connectorId}${txLabel ? ` · Tx ${txLabel}` : ""}`,
-                  badge: runtimeStateLabel,
-                  tone: "info",
-                  icon: "gauge",
-                  metrics: telemetryMetrics
-                });
               }
+              if (resolvedTransaction && existing.transactionId && existing.transactionId !== resolvedTransaction) {
+                return current;
+              }
+              const updatedStop = Math.max(
+                sample.valueWh,
+                existing.meterStopWh ?? sample.valueWh,
+                meterStartWh
+              );
+              return {
+                ...current,
+                [connectorId]: {
+                  ...existing,
+                  transactionId: resolvedTransaction ?? existing.transactionId,
+                  transactionKey: resolvedTransaction ?? existing.transactionKey,
+                  cmsTransactionKey: resolvedTransaction ?? existing.cmsTransactionKey,
+                  meterStartWh,
+                  meterStopWh: updatedStop,
+                  meterStopFinalWh: existing.meterStopFinalWh,
+                  activeSession: existing.activeSession ?? true,
+                  isFinal: false,
+                  finalSample: sample,
+                  lastSampleAt: sample.isoTimestamp
+                }
+              };
+            });
+            frozenConnectorsRef.current.delete(connectorId);
+            appendTelemetrySample(connectorId, sample);
+            if (shouldRecordTelemetry(connectorId, sample.isoTimestamp)) {
+              const runtimeState = sessionsRef.current[connectorId]?.state;
+              const telemetryMetrics: TimelineMetric[] = [];
+              const powerLabel = `${sample.powerKw.toFixed(2)} kW`;
+              const currentLabel = `${sample.currentA.toFixed(1)} A`;
+              const energyValue = sample.energyKwh;
+              telemetryMetrics.push({
+                label: "Energy",
+                value: `${formatNumber(energyValue, { digits: 3 })} kWh`
+              });
+              telemetryMetrics.push({ label: "Power", value: powerLabel });
+              telemetryMetrics.push({ label: "Current", value: currentLabel, muted: true });
+              const runtimeStateLabel = runtimeState
+                ? getSessionStatusLabel(runtimeState)
+                : "Telemetry";
+              const txLabel = resolvedTransaction ?? runtimeSnapshot?.transactionId;
+              pushTimelineEvent({
+                dedupeKey: `meter:${connectorId}:${sample.isoTimestamp}`,
+                timestamp: sample.isoTimestamp,
+                kind: "meter",
+                title: "Telemetry update",
+                subtitle: `Connector #${connectorId}${txLabel ? ` · Tx ${txLabel}` : ""}`,
+                badge: runtimeStateLabel,
+                tone: "info",
+                icon: "gauge",
+                metrics: telemetryMetrics
+              });
             }
           })();
           break;
@@ -2127,7 +2294,7 @@ const activeSession = useMemo(() => {
               ? event.startedAt
               : new Date().toISOString();
           const rawMeterStart = Number(event.meterStartWh);
-          let normalizedMeterStart = Number.isFinite(rawMeterStart) ? rawMeterStart : undefined;
+          const normalizedMeterStart = Number.isFinite(rawMeterStart) ? rawMeterStart : undefined;
           const pricePerKwh =
             typeof event.pricePerKwh === "number"
               ? event.pricePerKwh
@@ -2138,15 +2305,19 @@ const activeSession = useMemo(() => {
               : null;
           const idTag =
             typeof event.idTag === "string" ? event.idTag : undefined;
+          const cachedStart = transactionId ? meterStartCacheRef.current.get(transactionId) : undefined;
+          const baselineStart = normalizedMeterStart ?? cachedStart ?? 0;
           frozenConnectorsRef.current.delete(connectorId);
           setSessionsByConnector((current) => {
             const existing = current[connectorId];
-            const previousStop = existing?.meterStopWh;
-            let resolvedStart = normalizedMeterStart ?? previousStop ?? 0;
-            if (typeof previousStop === "number" && resolvedStart < previousStop) {
-              resolvedStart = previousStop;
-            }
-            normalizedMeterStart = resolvedStart;
+            const cachedStart = transactionId ? meterStartCacheRef.current.get(transactionId) : undefined;
+            const resolvedStart =
+              resolveMeterStart(transactionId ?? existing?.transactionId, normalizedMeterStart ?? existing?.meterStartWh, undefined) ??
+              cachedStart ??
+              normalizedMeterStart ??
+              existing?.meterStartWh ??
+              0;
+            rememberMeterStart(transactionId, resolvedStart);
             return {
               ...current,
               [connectorId]: {
@@ -2160,7 +2331,10 @@ const activeSession = useMemo(() => {
                 updatedAt: startedAt,
                 state: "charging",
                 meterStartWh: resolvedStart,
-                meterStopWh: undefined,
+                meterStopWh: resolvedStart,
+                meterStopFinalWh: undefined,
+                isFinal: false,
+                activeSession: true,
                 pricePerKwh: pricePerKwh ?? existing?.pricePerKwh ?? null,
                 maxKw: maxKw ?? existing?.maxKw ?? null,
                 cmsSessionId: existing?.cmsSessionId,
@@ -2176,15 +2350,19 @@ const activeSession = useMemo(() => {
               {
                 connectorId,
                 timestamp: startedAt,
-                valueWh: normalizedMeterStart ?? 0,
+                valueWh: baselineStart,
                 powerKw: 0,
                 currentA: 0,
-                energyKwh: Number(((normalizedMeterStart ?? 0) / 1000).toFixed(3)),
+                energyKwh: Number((baselineStart / 1000).toFixed(3)),
                 transactionId: transactionId ?? existing?.transactionId
               },
               undefined
             );
-            const updatedSamples = appendSample(existing?.samples ?? [], baselineSample);
+            const baseSamples =
+              existing?.transactionId && transactionId && existing.transactionId !== transactionId
+                ? []
+                : existing?.samples ?? [];
+            const updatedSamples = appendSample(baseSamples, baselineSample);
             return {
               ...current,
               [connectorId]: {
@@ -2201,8 +2379,8 @@ const activeSession = useMemo(() => {
           patchTelemetrySnapshot(connectorId, {
             transactionId: transactionId ?? undefined,
             state: "CHARGING",
-            meterStartWh: normalizedMeterStart ?? undefined,
-            meterStopWh: undefined,
+            meterStartWh: normalizedMeterStart ?? baselineStart ?? undefined,
+            meterStopWh: baselineStart,
             lastSample: snapshotPayloadFromSample(baselineSample)
           });
           queryClient.invalidateQueries({
@@ -2294,12 +2472,18 @@ const activeSession = useMemo(() => {
             if (transactionId && existing.transactionId && existing.transactionId !== transactionId) {
               return current;
             }
+            const stopValue = Number.isFinite(meterStopWh) ? (meterStopWh as number) : existing.meterStopWh;
+            const meterStartWh = existing.meterStartWh ?? previousSession?.meterStartWh ?? 0;
+            const safeStop = typeof stopValue === "number" ? Math.max(stopValue, meterStartWh) : stopValue;
             const updatedSession: SessionRuntime = {
               ...existing,
               state: "completed",
               completedAt: sampleTimestamp ?? endedAt,
               updatedAt: sampleTimestamp ?? endedAt,
-              meterStopWh: Number.isFinite(meterStopWh) ? meterStopWh : existing.meterStopWh,
+              meterStopWh: safeStop ?? existing.meterStopWh,
+              meterStopFinalWh: safeStop ?? existing.meterStopFinalWh,
+              isFinal: true,
+              activeSession: false,
               transactionId: transactionId ?? existing.transactionId,
               transactionKey: transactionId ?? existing.transactionKey,
               cmsTransactionKey: transactionId ?? existing.cmsTransactionKey,
@@ -2354,6 +2538,8 @@ const activeSession = useMemo(() => {
             transactionId: transactionId ?? undefined,
             state: "COMPLETED",
             meterStopWh: Number.isFinite(meterStopWh) ? meterStopWh : undefined,
+            meterStopFinalWh: Number.isFinite(meterStopWh) ? meterStopWh : undefined,
+            isFinal: true,
             lastSample: snapshotPayloadFromSample(finalizedSample ?? stopSample)
           });
           void hydrateConnectorHistory(connectorId, historyTransaction);
@@ -2495,7 +2681,15 @@ const activeSession = useMemo(() => {
       shouldRecordTelemetry,
       refreshSimulator,
       getSessionStatusLabel,
-      lifecycleState
+      lifecycleState,
+      meterTimelines,
+      appendTelemetrySample,
+      patchConnectorStatus,
+      patchTelemetrySnapshot,
+      hydrateConnectorHistory,
+      rememberMeterStart,
+      resolveMeterStart,
+      formatNumber
     ]
   );
 
@@ -2513,7 +2707,7 @@ const activeSession = useMemo(() => {
     }
     setCommandBusy("start");
     try {
-      await api.request(`/api/ocpp-simulator/simulated-chargers/${data.id}/remote-start/`, {
+      await api.request(endpoints.simulators.remoteStart(data.id), {
         method: "POST",
         body: { connectorId: payload.connectorId, idTag: payload.idTag }
       });
@@ -2540,7 +2734,7 @@ const activeSession = useMemo(() => {
     }
     setCommandBusy("stop");
     try {
-      await api.request(`/api/ocpp-simulator/simulated-chargers/${data.id}/remote-stop/`, {
+      await api.request(endpoints.simulators.remoteStop(data.id), {
         method: "POST",
         body: {
           ...(payload.connectorId ? { connectorId: payload.connectorId } : {}),
@@ -2555,6 +2749,10 @@ const activeSession = useMemo(() => {
       });
       setShowStopModal(false);
       refreshSimulator();
+      if (typeof window !== "undefined") {
+        window.setTimeout(() => refreshSimulator(), 2000);
+        window.setTimeout(() => refreshSimulator(), 6000);
+      }
     } catch (error) {
       const message = extractErrorMessage(error);
       throw new Error(message);
@@ -2567,7 +2765,7 @@ const activeSession = useMemo(() => {
     if (!data) return;
     setCommandBusy("connect");
     try {
-      await api.request(`/api/ocpp-simulator/simulated-chargers/${data.id}/connect/`, {
+      await api.request(endpoints.simulators.connect(data.id), {
         method: "POST"
       });
       pushToast({
@@ -2593,7 +2791,7 @@ const activeSession = useMemo(() => {
     if (!data) return;
     setCommandBusy("disconnect");
     try {
-      await api.request(`/api/ocpp-simulator/simulated-chargers/${data.id}/disconnect/`, {
+      await api.request(endpoints.simulators.disconnect(data.id), {
         method: "POST"
       });
       pushToast({
@@ -2631,7 +2829,7 @@ const activeSession = useMemo(() => {
     setCommandConnectorId(targetConnectorId);
     setCommandBusy("plug");
     try {
-      await api.request(`/api/ocpp-simulator/simulated-chargers/${data.id}/status-update/`, {
+      await api.request(endpoints.simulators.statusUpdate(data.id), {
         method: "POST",
         body: { connectorId: targetConnectorId, status: "Preparing" }
       });
@@ -2642,7 +2840,9 @@ const activeSession = useMemo(() => {
         level: "success",
         timeoutMs: 3000
       });
-      refreshSimulator();
+      if (typeof window !== "undefined") {
+        window.setTimeout(() => refreshSimulator(), 1200);
+      }
     } catch (error) {
       const message = extractErrorMessage(error);
       pushToast({
@@ -2672,7 +2872,7 @@ const activeSession = useMemo(() => {
     setCommandConnectorId(targetConnectorId);
     setCommandBusy("unplug");
     try {
-      await api.request(`/api/ocpp-simulator/simulated-chargers/${data.id}/status-update/`, {
+      await api.request(endpoints.simulators.statusUpdate(data.id), {
         method: "POST",
         body: { connectorId: targetConnectorId, status: "Available" }
       });
@@ -2683,7 +2883,9 @@ const activeSession = useMemo(() => {
         level: "success",
         timeoutMs: 3000
       });
-      refreshSimulator();
+      if (typeof window !== "undefined") {
+        window.setTimeout(() => refreshSimulator(), 1200);
+      }
     } catch (error) {
       const message = extractErrorMessage(error);
       pushToast({
@@ -2707,7 +2909,7 @@ const activeSession = useMemo(() => {
     }
     setFaultPending(true);
     try {
-      await api.request(`/api/ocpp-simulator/simulated-chargers/${data.id}/fault-injection/`, {
+      await api.request(endpoints.simulators.faultInjection(data.id), {
         method: "POST",
         body: {
           faultCode: payload.faultCode,
@@ -2736,7 +2938,7 @@ const activeSession = useMemo(() => {
     if (!data) return;
     setCommandBusy("reset");
     try {
-      await api.request(`/api/ocpp-simulator/simulated-chargers/${data.id}/reset/`, {
+      await api.request(endpoints.simulators.reset(data.id), {
         method: "POST",
         body: { type: resetType }
       });
@@ -2769,7 +2971,7 @@ const activeSession = useMemo(() => {
     if (!data) return;
     setCommandBusy("force-reset");
     try {
-      await api.request(`/api/ocpp-simulator/simulated-chargers/${data.id}/force-reset/`, {
+      await api.request(endpoints.simulators.forceReset(data.id), {
         method: "POST"
       });
       pushToast({
@@ -2916,13 +3118,21 @@ const activeSession = useMemo(() => {
       setShowStartModal(true);
     }
   };
+  const latestInstanceStatus = latestInstance?.status ?? data.latest_instance_status ?? null;
+  const hasActiveRuntime =
+    latestInstanceStatus === "running" || latestInstanceStatus === "pending";
   const hideConnectionControls =
     lifecycleState === "OFFLINE" || lifecycleState === "ERROR" || lifecycleState === "CHARGING";
   const needsReconnect = !cmsConnected && !hideConnectionControls;
   const showConnectControl =
     !hideConnectionControls &&
     (lifecycleState === "POWERED_ON" || lifecycleState === "CONNECTING" || needsReconnect);
-  const showDisconnectControl = !hideConnectionControls && cmsConnected;
+  const disconnectLifecycleAllowed =
+    lifecycleState === "CONNECTING" ||
+    lifecycleState === "CONNECTED" ||
+    lifecycleState === "POWERED_ON";
+  const showDisconnectControl =
+    !hideConnectionControls && hasActiveRuntime && disconnectLifecycleAllowed;
   const connectButtonLabel =
     commandBusy === "connect" || lifecycleState === "CONNECTING"
       ? "Connecting…"
@@ -2932,19 +3142,25 @@ const activeSession = useMemo(() => {
   const disconnectButtonLabel =
     commandBusy === "disconnect" || lifecycleState === "CONNECTING" ? "Disconnecting…" : "Disconnect";
   const connectControlDisabled = commandBusy !== null || lifecycleState === "CONNECTING";
-  const disconnectControlDisabled = commandBusy !== null || lifecycleState === "CONNECTING";
+  const disconnectControlDisabled = commandBusy !== null || !hasActiveRuntime;
   const connectControlTitle =
     lifecycleState === "CONNECTING"
       ? "CMS connection in progress."
       : needsReconnect
         ? "CMS heartbeat missing — reconnect to resume telemetry."
         : "Connect the simulator to the CMS.";
-  const disconnectControlTitle =
-    lifecycleState === "CONNECTING"
-      ? "Waiting for the CMS handshake."
-      : commandBusy === "disconnect"
-        ? "Disconnect request already pending."
-        : undefined;
+  const disconnectControlTitle = (() => {
+    if (!hasActiveRuntime) {
+      return "No active simulator runtime to disconnect.";
+    }
+    if (lifecycleState === "CONNECTING") {
+      return "Cancel the pending CMS connection.";
+    }
+    if (commandBusy === "disconnect") {
+      return "Disconnect request already pending.";
+    }
+    return undefined;
+  })();
   const timelinePlaceholderMessage = cmsConnected
     ? "Waiting for live charger activity."
     : "Connect the simulator to stream live charger events.";
@@ -3850,7 +4066,7 @@ const EventTimelineCard = memo(
                           {entry.powerKw !== null ? `${entry.powerKw.toFixed(2)} kW` : "— kW"} ·{" "}
                           {entry.current !== null ? `${Math.round(entry.current)} A` : "— A"} ·{" "}
                           {entry.energyKwh !== null ? `${entry.energyKwh.toFixed(3)} kWh` : "— kWh"}
-                          {entry.energyRegisterKwh !== null &&
+                          {entry.energyRegisterKwh != null &&
                           entry.energyRegisterKwh !== entry.energyKwh
                             ? ` (reg ${entry.energyRegisterKwh.toFixed(3)} kWh)`
                             : ""}

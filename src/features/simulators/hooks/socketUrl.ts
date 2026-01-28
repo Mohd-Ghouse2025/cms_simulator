@@ -1,5 +1,7 @@
 'use client';
 
+let warnedMissingAuth = false;
+
 const trimBasePath = (value: string) => value.replace(/\/+$/, "");
 
 export const buildSimulatorSocketUrl = (
@@ -11,18 +13,24 @@ export const buildSimulatorSocketUrl = (
   if (!baseUrl) {
     return null;
   }
+  if (!token || !tenantSchema) {
+    if (process.env.NODE_ENV !== "production") {
+      if (!warnedMissingAuth) {
+        console.warn("[simulator-socket] missing token or tenant schema; skipping websocket connection");
+        warnedMissingAuth = true;
+      }
+    }
+    return null;
+  }
+  warnedMissingAuth = false;
   try {
     const url = new URL(baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const basePath = trimBasePath(url.pathname);
     url.pathname = `${basePath}/ws/ocpp-sim/${encodeURIComponent(chargerId)}/`;
     const params = new URLSearchParams();
-    if (tenantSchema) {
-      params.set("tenant_schema", tenantSchema);
-    }
-    if (token) {
-      params.set("token", token);
-    }
+    params.set("tenant_schema", tenantSchema);
+    params.set("token", token);
     const query = params.toString();
     url.search = query ? `?${query}` : "";
     url.hash = "";

@@ -10,13 +10,9 @@ import { Pagination } from "@/components/common/Pagination";
 import { useTenantApi } from "@/hooks/useTenantApi";
 import { queryKeys } from "@/lib/queryKeys";
 import { pickCanonicalTransactionId } from "@/lib/transactions";
+import { endpoints } from "@/lib/endpoints";
 import { ChargingSession, SimulatedSession } from "@/types";
 import styles from "./SessionsPage.module.css";
-
-interface PaginatedResponse<T> {
-  count: number;
-  results: T[];
-}
 
 const SESSION_PAGE_SIZE = 10;
 const SIMULATED_LOOKBACK_PAGE_SIZE = 200;
@@ -44,7 +40,7 @@ export const SessionsPage = () => {
   const cmsSessionsQuery = useQuery({
     queryKey: queryKeys.chargingSessions({ page, page_size: SESSION_PAGE_SIZE }),
     queryFn: () =>
-      api.request<PaginatedResponse<ChargingSession>>("/api/ocpp/charging-sessions/", {
+      api.requestPaginated<ChargingSession>(endpoints.cms.chargingSessions, {
         query: {
           ordering: "-start_time",
           page_size: SESSION_PAGE_SIZE,
@@ -57,7 +53,7 @@ export const SessionsPage = () => {
   const simulatedSessionsQuery = useQuery({
     queryKey: queryKeys.sessions({ page_size: SIMULATED_LOOKBACK_PAGE_SIZE }),
     queryFn: () =>
-      api.request<PaginatedResponse<SimulatedSession>>("/api/ocpp-simulator/sessions/", {
+      api.requestPaginated<SimulatedSession>(endpoints.sessions, {
         query: { page_size: SIMULATED_LOOKBACK_PAGE_SIZE }
       }),
     staleTime: 30_000

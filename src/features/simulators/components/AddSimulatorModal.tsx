@@ -5,6 +5,7 @@ import { Button } from "@/components/common/Button";
 import { useTenantApi } from "@/hooks/useTenantApi";
 import { useNotificationStore } from "@/store/notificationStore";
 import { queryKeys } from "@/lib/queryKeys";
+import { endpoints } from "@/lib/endpoints";
 import { SimulatedCharger } from "@/types";
 import styles from "./AddSimulatorModal.module.css";
 
@@ -12,11 +13,6 @@ interface AddSimulatorModalProps {
   open: boolean;
   onClose: () => void;
   onCreated: () => void;
-}
-
-interface ChargerFeatureCollection {
-  type: string;
-  features: ChargerFeature[];
 }
 
 interface ChargerFeature {
@@ -29,6 +25,8 @@ interface ChargerFeature {
     location?: string;
   };
 }
+
+type ChargerResult = ChargerFeature | (ChargerFeature["properties"] & { id: number });
 
 export const AddSimulatorModal = ({ open, onClose, onCreated }: AddSimulatorModalProps) => {
   const api = useTenantApi();
@@ -50,10 +48,7 @@ export const AddSimulatorModal = ({ open, onClose, onCreated }: AddSimulatorModa
     queryKey: queryKeys.chargers,
     enabled: open,
     queryFn: async () =>
-      api.request<{
-        count: number;
-        results: ChargerFeatureCollection;
-      }>("/api/ocpp/chargers/", {
+      api.requestPaginated<ChargerResult>(endpoints.cms.chargers, {
         query: { page_size: 200 }
       })
   });
@@ -62,10 +57,9 @@ export const AddSimulatorModal = ({ open, onClose, onCreated }: AddSimulatorModa
     queryKey: queryKeys.simulators(),
     enabled: open,
     queryFn: async () =>
-      api.request<{ count: number; results: SimulatedCharger[] }>(
-        "/api/ocpp-simulator/simulated-chargers/",
-        { query: { page_size: 200 } }
-      )
+      api.requestPaginated<SimulatedCharger>(endpoints.simulators.list, {
+        query: { page_size: 200 }
+      })
   });
 
   const simulatedChargerIds = useMemo(() => {
@@ -74,11 +68,26 @@ export const AddSimulatorModal = ({ open, onClose, onCreated }: AddSimulatorModa
   }, [simulatorsQuery.data?.results]);
 
   const options = useMemo(() => {
-    const all = chargersQuery.data?.results?.features ?? [];
+    const rawResults = chargersQuery.data?.results ?? [];
+    const normalized: ChargerFeature[] = rawResults.map((item) => {
+      if ("properties" in item) {
+        return item as ChargerFeature;
+      }
+      return {
+        id: item.id,
+        properties: {
+          charger_id: item.charger_id ?? "",
+          name: item.name,
+          alias: item.alias,
+          online: item.online,
+          location: item.location
+        }
+      };
+    });
     if (!simulatedChargerIds.size) {
-      return all;
+      return normalized;
     }
-    return all.filter((feature) => !simulatedChargerIds.has(feature.id));
+    return normalized.filter((feature) => !simulatedChargerIds.has(feature.id));
   }, [chargersQuery.data?.results, simulatedChargerIds]);
 
   const createMutation = useMutation({
@@ -86,7 +95,7 @@ export const AddSimulatorModal = ({ open, onClose, onCreated }: AddSimulatorModa
       if (!selectedCharger) {
         throw new Error("Select a charger to simulate");
       }
-      return api.request("/api/ocpp-simulator/simulated-chargers/", {
+      return api.request(endpoints.simulators.list, {
         method: "POST",
         body: {
           charger: Number(selectedCharger),
