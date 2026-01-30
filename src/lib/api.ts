@@ -192,6 +192,17 @@ export const normalizePaginatedResponse = <T>(data: unknown): PaginatedResponse<
       const count = typeof payload.count === "number" ? (payload.count as number) : results.length;
       return { count, results };
     }
+    // Handle GeoJSON FeatureCollection nested inside `results`
+    if (
+      payload.results &&
+      typeof payload.results === "object" &&
+      Array.isArray((payload.results as Record<string, unknown>).features)
+    ) {
+      const featureCollection = payload.results as Record<string, unknown>;
+      const features = featureCollection.features as T[];
+      const count = typeof payload.count === "number" ? (payload.count as number) : features.length;
+      return { count, results: features };
+    }
     if (Array.isArray(payload.features)) {
       const results = payload.features as T[];
       const count = typeof payload.count === "number" ? (payload.count as number) : results.length;
