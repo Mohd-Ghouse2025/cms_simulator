@@ -54,7 +54,13 @@ import { useSimulatorChannel } from "./hooks/useSimulatorChannel";
 import styles from "./SimulatorDetailPage.module.css";
 import { NormalizedSample, appendSample, normalizeSample, trimWindow } from "./graphHelpers";
 import { EditSimulatorModal, SimulatorUpdatePayload } from "./components/EditSimulatorModal";
-import { connectorStatusTone, formatConnectorStatusLabel, normalizeConnectorStatus } from "./utils/status";
+import {
+  connectorHasActiveSession,
+  connectorStatusTone,
+  formatConnectorStatusLabel,
+  isConnectorPlugged,
+  normalizeConnectorStatus
+} from "./utils/status";
 
 type DetailResponse = SimulatedCharger;
 
@@ -152,6 +158,36 @@ type TimelineEvent = {
 };
 
 type TimelineEventInput = Omit<TimelineEvent, "id">;
+
+type ConnectorSummary = {
+  connectorId: number;
+  connector: SimulatedConnector | null;
+  samples: NormalizedSample[];
+  sessionState: SessionLifecycle;
+  connectorStatus: string;
+  statusLabel: string;
+  statusTone: StatusTone;
+  sessionStatusLabel: string;
+  sessionStatusClass: string;
+  transactionId?: string;
+  transactionKey?: string;
+  runtime?: SessionRuntime;
+  energyKwh: number;
+  meterStartKwh: number;
+  meterStopKwh: number;
+  meterStopFinalWh?: number;
+  isFinal: boolean;
+  deltaKwh: number | null;
+  powerKw: number | null;
+  lastUpdated: string | null;
+  lastSampleAt: string | null;
+  duration: string | null;
+  cmsSession?: CmsChargingSession;
+  current: number | null;
+  idTag?: string;
+  activeSession: boolean;
+  isPlugged: boolean;
+};
 
 type TelemetryFeedEntry = {
   connectorId: number;
@@ -1285,7 +1321,17 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     }
   }, []);
 
-  const connectorsSummary = useMemo(() => {
+  const selectedSession = useMemo(() => {
+    const sessions = sessionsQuery.data?.results ?? [];
+    const charging = sessions.find(
+      (session) => session.state === "charging" || session.state === "authorized"
+    );
+    return charging ?? sessions[0] ?? null;
+  }, [sessionsQuery.data?.results]);
+  const activeSessionConnectorId = selectedSession ? resolveConnectorNumber(selectedSession) : null;
+  const activeSessionState = (selectedSession?.state ?? null) as string | null;
+
+  const connectorsSummary = useMemo<ConnectorSummary[]>(() => {
     const connectors = data?.connectors ?? [];
     const connectorsByNumber = new Map<number, SimulatedConnector>();
     connectors.forEach((connector) => {
@@ -1391,13 +1437,6 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
         runtime?.isFinal ||
         runtime?.state === "completed" ||
         Boolean(runtime?.completedAt ?? cmsSession?.end_time);
-      const activeSession =
-        runtime?.activeSession ??
-        (!isCompleted &&
-          (runtime?.state === "authorized" ||
-            runtime?.state === "charging" ||
-            runtime?.state === "finishing"));
-
       const activeStop = maxFinite([
         runtimeStopWh,
         latestSampleWh,
@@ -1418,9 +1457,16 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
 
       const sessionState: SessionLifecycle =
         runtime?.state ??
-        (activeSession ? telemetryState ?? runtime?.state ?? "charging" : undefined) ??
-        (cmsSession && !cmsSession.end_time ? "charging" : undefined) ??
+        (telemetryState as SessionLifecycle | undefined) ??
+        ((cmsSession && !cmsSession.end_time ? "charging" : undefined) as SessionLifecycle | undefined) ??
         stateFromConnector;
+      const connectorHasSession = connectorHasActiveSession({
+        sessionState,
+        sessionActive: runtime?.activeSession,
+        connectorId,
+        activeSessionConnectorId,
+        activeSessionState
+      });
       const startedAt = runtime?.startedAt ?? cmsSession?.start_time ?? samples[0]?.isoTimestamp;
       const completedAt =
         runtime?.completedAt ??
@@ -1485,7 +1531,9 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
         duration,
         cmsSession,
         current,
-        idTag
+        idTag,
+        activeSession: connectorHasSession,
+        isPlugged: isConnectorPlugged(connectorStatus)
       };
     });
   }, [
@@ -1497,7 +1545,9 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     meterTimelines,
     sessionsByConnector,
     nowTs,
-    resolveMeterStart
+    resolveMeterStart,
+    activeSessionConnectorId,
+    activeSessionState
   ]);
 
   const connectorSelectOptions = useMemo(
@@ -1679,14 +1729,6 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
   const graphSamples =
     graphIsFrozen && frozenGraphSamples.length ? frozenGraphSamples : liveGraphSamples;
 
-const activeSession = useMemo(() => {
-  const sessions = sessionsQuery.data?.results ?? [];
-  const charging = sessions.find((session) =>
-    session.state === "charging" || session.state === "authorized"
-  );
-  return charging ?? sessions[0] ?? null;
-}, [sessionsQuery.data?.results]);
-
   const resetStatusLabel = useMemo(() => {
     if (!resetFlow) {
       return null;
@@ -1705,19 +1747,19 @@ const activeSession = useMemo(() => {
 
   const handleQuickStop = async () => {
     if (!data) return;
-    if (!activeSession) {
+    if (!selectedSession) {
       setShowStopModal(true);
       return;
     }
     try {
       const sessionTransactionKey = pickCanonicalTransactionId(
-        activeSession.cms_transaction_key,
-        activeSession.cms_transaction
+        selectedSession.cms_transaction_key,
+        selectedSession.cms_transaction
       );
       const matchedConnector = sessionTransactionKey
         ? connectorsSummary.find((summary) => summary.transactionKey === sessionTransactionKey)
         : null;
-      const connectorNumberFromSession = activeSession ? resolveConnectorNumber(activeSession) : null;
+      const connectorNumberFromSession = selectedSession ? resolveConnectorNumber(selectedSession) : null;
       const connectorToStop = matchedConnector?.connectorId ?? connectorNumberFromSession ?? undefined;
       await handleRemoteStop({
         transactionId: sessionTransactionKey,
@@ -2871,18 +2913,45 @@ const activeSession = useMemo(() => {
     }
     setCommandConnectorId(targetConnectorId);
     setCommandBusy("unplug");
+    const connectorSummary = connectorsSummary.find((summary) => summary.connectorId === targetConnectorId);
+    const isPlugged = isConnectorPlugged(connectorSummary?.connectorStatus ?? connectorSummary?.connector?.initial_status);
+    const hasActiveSession = connectorHasActiveSession({
+      sessionState: connectorSummary?.sessionState,
+      sessionActive: connectorSummary?.activeSession,
+      connectorId: targetConnectorId,
+      activeSessionConnectorId,
+      activeSessionState
+    });
+    if (!isPlugged) {
+      setCommandConnectorId(null);
+      setCommandBusy(null);
+      return;
+    }
     try {
-      await api.request(endpoints.simulators.statusUpdate(data.id), {
-        method: "POST",
-        body: { connectorId: targetConnectorId, status: "Available" }
-      });
-      patchConnectorStatus(targetConnectorId, "AVAILABLE");
-      pushToast({
-        title: "Connector set to Available",
-        description: `Connector #${targetConnectorId} unplugged.`,
-        level: "success",
-        timeoutMs: 3000
-      });
+      if (hasActiveSession) {
+        await api.request(endpoints.simulators.unplug(data.id), {
+          method: "POST",
+          body: { connectorId: targetConnectorId }
+        });
+        pushToast({
+          title: "Unplug requested",
+          description: `StopTransaction will be sent for connector #${targetConnectorId}.`,
+          level: "success",
+          timeoutMs: 3000
+        });
+      } else {
+        await api.request(endpoints.simulators.statusUpdate(data.id), {
+          method: "POST",
+          body: { connectorId: targetConnectorId, status: "Available" }
+        });
+        patchConnectorStatus(targetConnectorId, "AVAILABLE");
+        pushToast({
+          title: "Connector set to Available",
+          description: `Connector #${targetConnectorId} unplugged.`,
+          level: "success",
+          timeoutMs: 3000
+        });
+      }
       if (typeof window !== "undefined") {
         window.setTimeout(() => refreshSimulator(), 1200);
       }
@@ -2893,6 +2962,7 @@ const activeSession = useMemo(() => {
         description: message,
         level: "error"
       });
+      refreshSimulator();
     } finally {
       setCommandConnectorId(null);
       setCommandBusy(null);
@@ -3556,6 +3626,7 @@ const activeSession = useMemo(() => {
               const isSelected = summary.connectorId === actionConnectorId;
               const plugging = commandBusy === "plug" && commandConnectorId === summary.connectorId;
               const unplugging = commandBusy === "unplug" && commandConnectorId === summary.connectorId;
+              const isPlugged = summary.isPlugged;
               return (
                 <div
                   key={summary.connectorId}
@@ -3585,28 +3656,32 @@ const activeSession = useMemo(() => {
                   ) : null}
                   <span className={styles.connectorStatus}>{status}</span>
                   <div className={styles.connectorActions}>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={plugging || unplugging}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void handlePlugConnector(summary.connectorId);
-                      }}
-                    >
-                      {plugging ? "Plugging…" : "Plug"}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={plugging || unplugging}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void handleUnplugConnector(summary.connectorId);
-                      }}
-                    >
-                      {unplugging ? "Unplugging…" : "Unplug"}
-                    </Button>
+                    {!isPlugged ? (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={plugging || unplugging}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handlePlugConnector(summary.connectorId);
+                        }}
+                      >
+                        {plugging ? "Plugging…" : "Plug"}
+                      </Button>
+                    ) : null}
+                    {isPlugged ? (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={plugging || unplugging}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleUnplugConnector(summary.connectorId);
+                        }}
+                      >
+                        {unplugging ? "Unplugging…" : "Unplug"}
+                      </Button>
+                    ) : null}
                   </div>
                 </div>
               );

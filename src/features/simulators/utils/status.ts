@@ -63,3 +63,64 @@ export const connectorStatusTone = (status?: ConnectorStatus | string | null): S
       return "neutral";
   }
 };
+
+export const ACTIVE_SESSION_STATES = ["authorized", "charging", "finishing"] as const;
+
+const PLUGGED_STATUSES: ConnectorStatus[] = [
+  "PREPARING",
+  "CHARGING",
+  "SUSPENDED_EV",
+  "SUSPENDED_EVSE",
+  "FINISHING",
+  "RESERVED",
+  "UNAVAILABLE"
+];
+
+export const isConnectorPlugged = (status?: ConnectorStatus | string | null): boolean => {
+  const normalized = normalizeConnectorStatus(status ?? "");
+  if (!normalized) return false;
+  if (normalized === "AVAILABLE") return false;
+  return PLUGGED_STATUSES.includes(normalized);
+};
+
+export const isActiveSessionState = (state?: string | null): boolean => {
+  if (!state) return false;
+  const normalized = state.toString().trim().toLowerCase();
+  return (ACTIVE_SESSION_STATES as readonly string[]).includes(normalized);
+};
+
+type ActiveSessionCheck = {
+  sessionState?: string | null;
+  sessionActive?: boolean;
+  connectorId?: number | null;
+  activeSessionConnectorId?: number | null;
+  activeSessionState?: string | null;
+};
+
+export const connectorHasActiveSession = ({
+  sessionState,
+  sessionActive,
+  connectorId,
+  activeSessionConnectorId,
+  activeSessionState
+}: ActiveSessionCheck): boolean => {
+  if (sessionActive) {
+    return true;
+  }
+  if (isActiveSessionState(sessionState)) {
+    return true;
+  }
+  if (
+    connectorId !== undefined &&
+    connectorId !== null &&
+    activeSessionConnectorId !== undefined &&
+    activeSessionConnectorId !== null &&
+    connectorId === activeSessionConnectorId
+  ) {
+    if (!activeSessionState) {
+      return true;
+    }
+    return isActiveSessionState(activeSessionState);
+  }
+  return false;
+};

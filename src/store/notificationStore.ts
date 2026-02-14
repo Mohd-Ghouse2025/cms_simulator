@@ -18,17 +18,58 @@ type NotificationState = {
 };
 
 const createId = () => crypto.randomUUID();
+const MAX_TOASTS = 3;
+const toastTimers = new Map<string, number>();
 
-export const useNotificationStore = create<NotificationState>((set) => ({
+const sameToast = (a: Toast, b: Toast) =>
+  (a.level ?? "info") === (b.level ?? "info") &&
+  a.title === b.title &&
+  (a.description ?? "") === (b.description ?? "");
+
+export const useNotificationStore = create<NotificationState>((set, get) => ({
   toasts: [],
-  pushToast: (toast) =>
-    set((state) => {
-      const id = toast.id ?? createId();
-      return { toasts: [...state.toasts, { ...toast, id }] };
-    }),
-  removeToast: (id) =>
+  pushToast: (toast) => {
+    const state = get();
+    const normalized: Toast = {
+      id: toast.id ?? createId(),
+      level: toast.level ?? "info",
+      ...toast
+    };
+
+    const duplicate = state.toasts.find((existing) => sameToast(existing, normalized));
+    const toastId = duplicate?.id ?? normalized.id;
+    const mergedToast: Toast = { ...duplicate, ...normalized, id: toastId };
+
+    const nextToasts = [...state.toasts.filter((item) => item.id !== toastId), mergedToast];
+    const trimmed = nextToasts.length > MAX_TOASTS ? nextToasts.slice(nextToasts.length - MAX_TOASTS) : nextToasts;
+
+    set({ toasts: trimmed });
+
+    if (mergedToast.timeoutMs && typeof window !== "undefined") {
+      const existingTimer = toastTimers.get(toastId);
+      if (existingTimer) {
+        window.clearTimeout(existingTimer);
+      }
+      const timer = window.setTimeout(() => {
+        toastTimers.delete(toastId);
+        get().removeToast(toastId);
+      }, mergedToast.timeoutMs);
+      toastTimers.set(toastId, timer);
+    }
+  },
+  removeToast: (id) => {
+    const timer = toastTimers.get(id);
+    if (timer) {
+      window.clearTimeout(timer);
+      toastTimers.delete(id);
+    }
     set((state) => ({
       toasts: state.toasts.filter((toast) => toast.id !== id)
-    })),
-  clear: () => set({ toasts: [] })
+    }));
+  },
+  clear: () => {
+    toastTimers.forEach((timer) => window.clearTimeout(timer));
+    toastTimers.clear();
+    set({ toasts: [] });
+  }
 }));

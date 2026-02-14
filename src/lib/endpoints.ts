@@ -18,6 +18,7 @@ export const endpoints = {
     remoteStart: (id: number | string) => `${SIM_BASE}/simulated-chargers/${id}/remote-start/`,
     remoteStop: (id: number | string) => `${SIM_BASE}/simulated-chargers/${id}/remote-stop/`,
     statusUpdate: (id: number | string) => `${SIM_BASE}/simulated-chargers/${id}/status-update/`,
+    unplug: (id: number | string) => `${SIM_BASE}/simulated-chargers/${id}/unplug/`,
     faultInjection: (id: number | string) => `${SIM_BASE}/simulated-chargers/${id}/fault-injection/`,
     reset: (id: number | string) => `${SIM_BASE}/simulated-chargers/${id}/reset/`,
     forceReset: (id: number | string) => `${SIM_BASE}/simulated-chargers/${id}/force-reset/`,

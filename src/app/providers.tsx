@@ -19,7 +19,26 @@ const handleQueryError = (error: unknown) => {
         level: "error",
         timeoutMs: 5000,
       })
+      return
     }
+
+    if (error.status === 0 || error.message.toLowerCase().includes("fetch")) {
+      pushToast({
+        id: "network-failed",
+        title: "Request failed",
+        description: "Failed to reach the server. Check your network and try again.",
+        level: "warning",
+        timeoutMs: 4000,
+      })
+      return
+    }
+
+    pushToast({
+      title: "Request failed",
+      description: error.message,
+      level: "warning",
+      timeoutMs: 4000,
+    })
     return
   }
   pushToast({

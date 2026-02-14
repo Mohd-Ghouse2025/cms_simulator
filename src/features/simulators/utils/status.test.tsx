@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
+  connectorHasActiveSession,
   connectorStatusTone,
   formatConnectorStatusLabel,
+  isConnectorPlugged,
+  isActiveSessionState,
   normalizeConnectorStatus
 } from "./status";
 
@@ -34,5 +37,46 @@ describe("connector status helpers", () => {
     expect(connectorStatusTone("FAULTED")).toBe("danger");
     expect(connectorStatusTone("PREPARING")).toBe("info");
     expect(connectorStatusTone("UNAVAILABLE")).toBe("warning");
+  });
+
+  it("detects whether a connector is physically plugged", () => {
+    expect(isConnectorPlugged("AVAILABLE")).toBe(false);
+    expect(isConnectorPlugged("Preparing")).toBe(true);
+    expect(isConnectorPlugged("CHARGING")).toBe(true);
+    expect(isConnectorPlugged("SUSPENDED_EV")).toBe(true);
+    expect(isConnectorPlugged("UNAVAILABLE")).toBe(true);
+    expect(isConnectorPlugged("FAULTED")).toBe(false);
+  });
+
+  it("identifies active session states and ignores idle ones", () => {
+    expect(isActiveSessionState("charging")).toBe(true);
+    expect(isActiveSessionState("finishing")).toBe(true);
+    expect(isActiveSessionState("completed")).toBe(false);
+  });
+
+  it("flags active sessions only on the matching connector", () => {
+    expect(
+      connectorHasActiveSession({
+        sessionState: "idle",
+        connectorId: 2,
+        activeSessionConnectorId: 1,
+        activeSessionState: "charging"
+      })
+    ).toBe(false);
+    expect(
+      connectorHasActiveSession({
+        sessionState: "idle",
+        connectorId: 1,
+        activeSessionConnectorId: 1,
+        activeSessionState: "charging"
+      })
+    ).toBe(true);
+    expect(
+      connectorHasActiveSession({
+        sessionState: "authorized",
+        connectorId: 3,
+        activeSessionConnectorId: 99
+      })
+    ).toBe(true);
   });
 });
