@@ -542,7 +542,12 @@ const SimulatorRow = ({
   const lifecycle = normalizeLifecycleState(simulator.lifecycle_state) ?? "OFFLINE";
   const runtimeStatusRaw = instance?.status ?? simulator.latest_instance_status ?? null;
   const runtimeStatus = formatRuntimeStatus(runtimeStatusRaw);
-  const isRuntimeRunning = runtimeStatusRaw === "running";
+  const heartbeatTimeoutMs = Math.max((simulator.default_heartbeat_interval ?? 60) * 3 * 1000, 180_000);
+  const heartbeatIso = instance?.last_heartbeat ?? simulator.latest_instance_last_heartbeat ?? null;
+  const nowTs = Date.now();
+  const heartbeatTs = heartbeatIso ? Date.parse(heartbeatIso) : NaN;
+  const heartbeatFresh = Number.isFinite(heartbeatTs) && nowTs - heartbeatTs <= heartbeatTimeoutMs;
+  const isRuntimeRunningFresh = runtimeStatusRaw === "running" && heartbeatFresh;
   const pendingTimestamp = (() => {
     const candidate =
       instance?.started_at ??
@@ -556,15 +561,19 @@ const SimulatorRow = ({
     return Number.isFinite(ts) ? ts : null;
   })();
   const pendingGraceMs = 90_000;
-  const nowTs = Date.now();
   const runtimeBooting =
     runtimeStatusRaw === "pending" &&
     pendingTimestamp !== null &&
     nowTs - pendingTimestamp < pendingGraceMs;
-  const hasActiveInstance = isRuntimeRunning || runtimeBooting;
-  const heartbeat = formatTimestamp(
-    instance?.last_heartbeat ?? simulator.latest_instance_last_heartbeat
-  );
+  const runtimeRecent = pendingTimestamp !== null && nowTs - pendingTimestamp < pendingGraceMs;
+  let hasActiveInstance = isRuntimeRunningFresh || runtimeBooting;
+  let runtimeStale = false;
+  if (lifecycle === "OFFLINE") {
+    const offlineRunning = isRuntimeRunningFresh && runtimeRecent;
+    runtimeStale = isRuntimeRunningFresh && !runtimeRecent;
+    hasActiveInstance = offlineRunning || runtimeBooting;
+  }
+  const heartbeat = formatTimestamp(heartbeatIso);
   const connectors = simulator.connectors ?? [];
   const cmsBadge = cmsBadgeFor(cmsOnline);
   const cmsConnected = cmsOnline === true;
@@ -618,6 +627,9 @@ const SimulatorRow = ({
         powerAction = "powerOn";
         powerLabel = busyAction === "powerOn" ? "Powering…" : "Power On";
         powerTone = "on";
+        if (runtimeStale) {
+          powerTitle = "Previous runtime looks stale; start a fresh process.";
+        }
       }
       break;
     case "ERROR":
@@ -801,3 +813,6 @@ const SimulatorRow = ({
     </tr>
   );
 };
+
+// Exposed only for tests
+export const _SimulatorRowTestOnly = SimulatorRow;

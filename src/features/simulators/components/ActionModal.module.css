@@ -143,3 +143,44 @@
   border-color: rgba(51, 65, 85, 0.3);
   background: #f8fafc;
 }
+
+.progressRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.progressSpacer {
+  flex: 1;
+  min-width: 12px;
+}
+
+.progressLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-slate-500);
+}
+
+.progressValue {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-navy-700);
+}
+
+.progressBar {
+  position: relative;
+  width: 100%;
+  max-width: 260px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--color-border);
+  overflow: hidden;
+  margin-top: 6px;
+}
+
+.progressFill {
+  height: 100%;
+  background: linear-gradient(90deg, #14b8a6, #0ea5e9);
+  border-radius: inherit;
+  transition: width 0.3s ease;
+}

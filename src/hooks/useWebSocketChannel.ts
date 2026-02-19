@@ -7,6 +7,8 @@ export type WebSocketStatus =
   | "closed"
   | "error";
 
+type OnUnauthorizedResult = boolean | void | Promise<boolean | void>;
+
 type UseWebSocketChannelOptions = {
   url: string | null;
   shouldConnect?: boolean;
@@ -17,12 +19,27 @@ type UseWebSocketChannelOptions = {
   /** optional keep-alive interval in ms; when provided we send a light ping frame */
   heartbeatIntervalMs?: number;
   onMessage?: (data: MessageEvent<unknown>) => void;
-  onUnauthorized?: () => void | boolean | Promise<void | boolean>;
+  onUnauthorized?: () => OnUnauthorizedResult;
 };
 
-const AUTH_CLOSE_CODES = new Set([4001, 4003, 4400, 4401, 4403]);
+const AUTH_CLOSE_CODES = new Set([403, 1008, 4001, 4003, 4400, 4401, 4403]);
 const MIN_RECONNECT_DELAY = 1000;
 const JITTER_RATIO = 0.35;
+
+const comparableUrl = (value: string | null): string | null => {
+  if (!value) return value;
+  try {
+    const parsed = new URL(value);
+    parsed.searchParams.delete("token");
+    parsed.searchParams.delete("access");
+    parsed.searchParams.delete("access_token");
+    const query = parsed.searchParams.toString();
+    parsed.search = query ? `?${query}` : "";
+    return parsed.toString();
+  } catch {
+    return value;
+  }
+};
 
 const isCloseEvent = (event: Event | CloseEvent): event is CloseEvent =>
   typeof (event as CloseEvent).code === "number";
@@ -64,6 +81,8 @@ export const useWebSocketChannel = ({
     maxReconnectDelayMs ?? baseDelay * 10,
     baseDelay
   );
+  const lastUrlRef = useRef<string | null>(null);
+  const lastComparableUrlRef = useRef<string | null>(null);
   const heartbeatTimerRef = useRef<number | null>(null);
   const connectionIdRef = useRef<string>("");
   if (!connectionIdRef.current) {
@@ -119,6 +138,7 @@ export const useWebSocketChannel = ({
       } catch {
         // ignored — attempting to close already closed socket
       }
+      socketRef.current = null;
     },
     []
   );
@@ -128,12 +148,49 @@ export const useWebSocketChannel = ({
       return;
     }
     const existing = socketRef.current;
-    if (
-      existing &&
-      existing.url === url &&
-      (existing.readyState === WebSocket.CONNECTING || existing.readyState === WebSocket.OPEN)
-    ) {
-      return;
+    const nextComparableUrl = comparableUrl(url);
+    if (existing) {
+      const isActive =
+        existing.readyState === WebSocket.CONNECTING || existing.readyState === WebSocket.OPEN;
+      if (isActive) {
+        const existingComparable = comparableUrl(existing.url);
+        if (existingComparable === nextComparableUrl) {
+          lastUrlRef.current = url;
+          lastComparableUrlRef.current = existingComparable;
+          return;
+        }
+      }
+      if (isActive && existing.url === url) {
+        return;
+      }
+      if (isActive && existing.readyState === WebSocket.CONNECTING && existing.url !== url) {
+        // Avoid aborting an in-flight handshake; let it settle and rely on natural reconnect.
+        if (process.env.NODE_ENV !== "production") {
+          console.debug(`[ws:${connectionIdRef.current}] url changed during CONNECTING; letting socket finish`, {
+            from: existing.url,
+            to: url
+          });
+        }
+        return;
+      }
+      if (isActive && existing.url !== url) {
+        if (process.env.NODE_ENV !== "production") {
+          console.debug(`[ws:${connectionIdRef.current}] closing for url change`, {
+            from: existing.url,
+            to: url
+          });
+        }
+        existing.onclose = null;
+        existing.onopen = null;
+        existing.onerror = null;
+        existing.onmessage = null;
+        try {
+          existing.close(1000, "reconnect:url-changed");
+        } catch {
+          // ignore close errors
+        }
+        socketRef.current = null;
+      }
     }
     try {
       manualCloseRef.current = false;
@@ -142,6 +199,8 @@ export const useWebSocketChannel = ({
       setError(null);
       const socket = new WebSocket(url, protocols);
       socketRef.current = socket;
+      lastUrlRef.current = url;
+      lastComparableUrlRef.current = nextComparableUrl;
       socket.onopen = () => {
         reconnectDelayRef.current = baseDelay;
         setStatus("open");
@@ -160,7 +219,7 @@ export const useWebSocketChannel = ({
         socketRef.current = null;
         if (process.env.NODE_ENV !== "production") {
           console.debug(
-            `[ws:${connectionIdRef.current}] close code=${isCloseEvent(event) ? event.code : "n/a"} reason=${isCloseEvent(event) ? event.reason : ""}`
+            `[ws:${connectionIdRef.current}] close code=${isCloseEvent(event) ? event.code : "n/a"} reason=${isCloseEvent(event) ? event.reason : ""} manual=${manualCloseRef.current} url=${url ?? lastUrlRef.current ?? ""}`
           );
         }
         setStatus("closed");
@@ -178,7 +237,7 @@ export const useWebSocketChannel = ({
         if (isUnauthorizedEvent(event)) {
           const outcome = unauthorizedHandlerRef.current?.();
           if (outcome && typeof (outcome as Promise<unknown>).then === "function") {
-            (outcome as Promise<unknown>)
+            (outcome as Promise<boolean | void>)
               .then((shouldReconnect) => {
                 if (shouldReconnect === false) {
                   return;
@@ -186,7 +245,11 @@ export const useWebSocketChannel = ({
                 triggerReconnect();
               })
               .catch(() => triggerReconnect());
-          } else if (outcome !== false) {
+          } else if (outcome === false) {
+            // Explicit opt-out from reconnect
+            return;
+          } else {
+            // undefined / void / true: default to reconnect
             triggerReconnect();
           }
           return;
@@ -264,9 +327,17 @@ export const useWebSocketChannel = ({
     return () => {
       clearReconnectTimer();
       clearHeartbeat();
-      disposeSocket();
+      // In dev StrictMode the first render's cleanup runs immediately; keep the socket
+      // alive across rerenders while we still intend to connect, and only tear down when
+      // the caller truly disables the channel.
+      if (!shouldConnect) {
+        disposeSocket();
+      }
     };
   }, [clearReconnectTimer, clearHeartbeat, connect, disposeSocket, shouldConnect, startHeartbeat, url]);
+
+  // Ensure sockets are closed on unmount regardless of shouldConnect state.
+  useEffect(() => () => disposeSocket(), [disposeSocket]);
 
   return useMemo(
     () => ({

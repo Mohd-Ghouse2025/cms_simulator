@@ -59,13 +59,23 @@ export interface ConnectorTelemetryHistory {
   cmsSessionId?: number | null;
   transactionId?: string | null;
   state?: string | null;
-   start_time?: string | null;
-   end_time?: string | null;
+  start_time?: string | null;
+  /**
+   * Legacy/alternative timestamp used by some telemetry producers
+   * (snake_case to match API payloads).
+   */
+  started_at?: string | null;
+  end_time?: string | null;
+  /**
+   * Legacy/alternative completion timestamp used by some telemetry producers.
+   */
+  completed_at?: string | null;
   meterStartWh?: number | null;
   meterStopWh?: number | null;
-   meterStopFinalWh?: number | null;
-   isFinal?: boolean | null;
-   activeSession?: boolean | null;
+  meterStopFinalWh?: number | null;
+  isFinal?: boolean | null;
+  activeSession?: boolean | null;
+  lastMeterSample?: TelemetrySampleSnapshot | null;
   samples: TelemetrySampleSnapshot[];
   finalSample?: TelemetrySampleSnapshot | null;
 }
@@ -75,17 +85,24 @@ export interface ConnectorTelemetrySnapshot {
   sessionId?: number | null;
   transactionId?: string | null;
   state?: string | null;
-   start_time?: string | null;
-   started_at?: string | null;
-   end_time?: string | null;
-   completed_at?: string | null;
+  start_time?: string | null;
+  /**
+   * Legacy/alternative timestamp used by some telemetry producers
+   * (snake_case to match API payloads).
+   */
+  started_at?: string | null;
+  end_time?: string | null;
+  /**
+   * Legacy/alternative completion timestamp used by some telemetry producers.
+   */
+  completed_at?: string | null;
   meterStartWh?: number | null;
   meterStopWh?: number | null;
-   meterStopFinalWh?: number | null;
-   isFinal?: boolean | null;
-   activeSession?: boolean | null;
+  meterStopFinalWh?: number | null;
+  isFinal?: boolean | null;
+  activeSession?: boolean | null;
   lastSample?: TelemetrySampleSnapshot | null;
-   lastMeterSample?: TelemetrySampleSnapshot | null;
+  lastMeterSample?: TelemetrySampleSnapshot | null;
 }
 
 export interface CmsIdTag {
@@ -180,6 +197,8 @@ export interface SimulatedSession {
   cms_transaction?: number | null;
   cms_transaction_key?: string | null;
   id_tag?: string;
+  user_limit?: number | null;
+  limit_type?: "KWH" | "AMOUNT" | string | null;
   state:
     | "pending"
     | "authorized"

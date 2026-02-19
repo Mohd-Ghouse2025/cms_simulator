@@ -192,7 +192,7 @@ export const normalizePaginatedResponse = <T>(data: unknown): PaginatedResponse<
       const count = typeof payload.count === "number" ? (payload.count as number) : results.length;
       return { count, results };
     }
-    // Handle GeoJSON FeatureCollection nested inside `results`
+    // Handle GeoJSON FeatureCollection returned inside `results` (DRF GeoFeatureModelSerializer)
     if (
       payload.results &&
       typeof payload.results === "object" &&

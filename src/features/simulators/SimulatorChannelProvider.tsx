@@ -56,6 +56,7 @@ type BridgeProps = {
   onStatus: (status: WebSocketStatus, error: Event | null) => void;
   notify: (payload: SimulatorEvent) => void;
   onUnauthorized: () => Promise<boolean> | boolean;
+  authFingerprint: string;
 };
 
 const SimulatorSocketBridge = ({
@@ -64,7 +65,8 @@ const SimulatorSocketBridge = ({
   shouldConnect,
   onStatus,
   notify,
-  onUnauthorized
+  onUnauthorized,
+  authFingerprint
 }: BridgeProps) => {
   const { status, error } = useWebSocketChannel({
     url,
@@ -80,6 +82,25 @@ const SimulatorSocketBridge = ({
     onStatus(status, error);
   }, [status, error, onStatus]);
 
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production" || typeof window === "undefined") return;
+    const ts = new Date().toISOString();
+    // eslint-disable-next-line no-console
+    console.debug("[simulator][bridge][mount]", { ts, chargerId, url, shouldConnect, authFingerprint });
+    return () => {
+      const endTs = new Date().toISOString();
+      // eslint-disable-next-line no-console
+      console.debug("[simulator][bridge][unmount]", { ts: endTs, chargerId });
+    };
+  }, [authFingerprint, chargerId, shouldConnect, url]);
+
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production" || typeof window === "undefined") return;
+    const ts = new Date().toISOString();
+    // eslint-disable-next-line no-console
+    console.debug("[simulator][bridge][status]", { ts, chargerId, status, error: error?.type, url, shouldConnect });
+  }, [chargerId, error?.type, shouldConnect, status, url]);
+
   return null;
 };
 
@@ -88,6 +109,7 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
   const accessToken = tokens?.access ?? null;
   const tenantSchema = tenant ?? null;
   const canConnect = hydrated && isAuthenticated && Boolean(accessToken && tenantSchema && baseUrl);
+  const authFingerprint = `${tenantSchema ?? ""}:${accessToken ?? ""}`;
 
   const [snapshots, setSnapshots] = useState<Record<string, ChannelSnapshot>>({});
   const [activeIds, setActiveIds] = useState<string[]>([]);
@@ -108,6 +130,17 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
   );
 
   const notifyListeners = useCallback((chargerId: string, payload: SimulatorEvent) => {
+    if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+      const { type, connectorId, transactionId } = payload as Record<string, unknown>;
+      const valueWh = (payload as Record<string, unknown>).valueWh ?? (payload as Record<string, unknown>).value;
+      const energyKwh = (payload as Record<string, unknown>).energyKwh;
+      const ts =
+        (payload as Record<string, unknown>).sampleTimestamp ??
+        (payload as Record<string, unknown>).timestamp ??
+        null;
+      // eslint-disable-next-line no-console
+      console.debug("[simulator][ws]", { type, connectorId, transactionId, valueWh, energyKwh, timestamp: ts });
+    }
     const listeners = listenersRef.current.get(chargerId);
     if (!listeners || !listeners.size) {
       return;
@@ -215,6 +248,19 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
           ? buildSimulatorSocketUrl(baseUrl, chargerId, accessToken, tenantSchema)
           : null;
         const shouldConnect = canConnect && Boolean(url);
+        if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+          // eslint-disable-next-line no-console
+          console.debug("[simulator][provider][render]", {
+            chargerId,
+            baseUrl,
+            tenantSchema,
+            hasToken: Boolean(accessToken),
+            canConnect,
+            url,
+            shouldConnect,
+            authFingerprint
+          });
+        }
         return (
           <SimulatorSocketBridge
             key={chargerId}
@@ -224,6 +270,7 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
             onStatus={(status, error) => handleStatus(chargerId, status, error)}
             notify={(payload) => notifyListeners(chargerId, payload)}
             onUnauthorized={handleUnauthorized}
+            authFingerprint={authFingerprint}
           />
         );
       })}

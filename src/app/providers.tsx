@@ -22,6 +22,7 @@ const handleQueryError = (error: unknown) => {
       return
     }
 
+    // Collapse repeated fetch failures into one toast to avoid stacking spam
     if (error.status === 0 || error.message.toLowerCase().includes("fetch")) {
       pushToast({
         id: "network-failed",

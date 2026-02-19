@@ -78,5 +78,22 @@ describe("connector status helpers", () => {
         activeSessionConnectorId: 99
       })
     ).toBe(true);
+    expect(
+      connectorHasActiveSession({
+        sessionState: "idle",
+        connectorId: 2,
+        activeSessionConnectorId: 1,
+        activeSessionState: "charging"
+      })
+    ).toBe(false);
+    expect(
+      connectorHasActiveSession({
+        sessionState: "charging",
+        sessionActive: true,
+        connectorId: 1,
+        activeSessionConnectorId: 1,
+        activeSessionState: "charging"
+      })
+    ).toBe(true);
   });
 });

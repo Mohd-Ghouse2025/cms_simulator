@@ -73,6 +73,11 @@ export const FaultInjectionModal = ({
           Sends a simulator:fault command so the station broadcasts a StatusNotification with the
           selected error code.
         </p>
+        {!definitions.length ? (
+          <div className={styles.error} role="alert">
+            No fault definitions available. Try reloading the page to fetch the catalog.
+          </div>
+        ) : null}
         <label className={styles.label}>
           Fault definition
           <select

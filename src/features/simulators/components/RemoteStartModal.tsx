@@ -4,32 +4,46 @@ import { useQuery } from "@tanstack/react-query";
 import { Modal } from "@/components/common/Modal";
 import { Button } from "@/components/common/Button";
 import { CmsIdTag, SimulatedConnector } from "@/types";
+import { ConnectorSummary } from "../types/detail";
 import styles from "./ActionModal.module.css";
 import { useTenantApi } from "@/hooks/useTenantApi";
 import { queryKeys } from "@/lib/queryKeys";
 import { useTenantAuth } from "@/features/auth/useTenantAuth";
 import { getUserIdFromToken } from "@/lib/jwt";
 import { endpoints } from "@/lib/endpoints";
-import { connectorStatusTone, formatConnectorStatusLabel, normalizeConnectorStatus } from "../utils/status";
+import {
+  connectorStatusTone,
+  formatConnectorStatusLabel,
+  isConnectorPlugged,
+  normalizeConnectorStatus
+} from "../utils/status";
 
 interface RemoteStartModalProps {
   open: boolean;
   connectors: SimulatedConnector[];
   busy?: boolean;
+  initialConnectorId?: number | null;
+  summaryByConnector?: Record<number, ConnectorSummary>;
+  defaultPricePerKwh?: number | null;
   onCancel: () => void;
-  onSubmit: (payload: { connectorId: number; idTag: string }) => Promise<void>;
+  onSubmit: (payload: { connectorId: number; idTag: string; userLimit?: number | null; limitType?: "KWH" | "AMOUNT" | null }) => Promise<void>;
 }
 
 export const RemoteStartModal = ({
   open,
   connectors,
   busy,
+  initialConnectorId,
+  summaryByConnector,
+  defaultPricePerKwh,
   onCancel,
   onSubmit
 }: RemoteStartModalProps) => {
   const firstConnectorId = useMemo(() => connectors[0]?.connector_id ?? 1, [connectors]);
-  const [connectorId, setConnectorId] = useState<number>(firstConnectorId);
+  const [connectorId, setConnectorId] = useState<number>(initialConnectorId ?? firstConnectorId);
   const [idTag, setIdTag] = useState("SIM");
+  const [limitType, setLimitType] = useState<"" | "KWH" | "AMOUNT">("");
+  const [limitValue, setLimitValue] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const datalistId = useId();
   const api = useTenantApi();
@@ -40,10 +54,15 @@ export const RemoteStartModal = ({
     () => connectors.find((connector) => connector.connector_id === connectorId),
     [connectors, connectorId]
   );
+  const selectedSummary = useMemo(
+    () => summaryByConnector?.[connectorId],
+    [summaryByConnector, connectorId]
+  );
   const connectorStatus = useMemo(
     () => normalizeConnectorStatus(selectedConnector?.initial_status ?? "AVAILABLE"),
     [selectedConnector]
   );
+  const connectorPlugged = useMemo(() => isConnectorPlugged(connectorStatus), [connectorStatus]);
   const statusLabel = useMemo(() => formatConnectorStatusLabel(connectorStatus), [connectorStatus]);
   const statusTone = useMemo(() => connectorStatusTone(connectorStatus), [connectorStatus]);
   const statusToneClass = useMemo(() => {
@@ -79,11 +98,13 @@ export const RemoteStartModal = ({
 
   useEffect(() => {
     if (open) {
-      setConnectorId(firstConnectorId);
+      setConnectorId(initialConnectorId ?? firstConnectorId);
       setIdTag("SIM");
+      setLimitType("");
+      setLimitValue("");
       setError(null);
     }
-  }, [open, firstConnectorId]);
+  }, [open, firstConnectorId, initialConnectorId]);
 
   useEffect(() => {
     if (!open || !idTags.length) {
@@ -99,16 +120,32 @@ export const RemoteStartModal = ({
 
   const handleClose = () => {
     setError(null);
-    setConnectorId(firstConnectorId);
+    setConnectorId(initialConnectorId ?? firstConnectorId);
     setIdTag("SIM");
+    setLimitType("");
+    setLimitValue("");
     onCancel();
   };
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     setError(null);
+    if (!connectorPlugged) {
+      setError("Plug the connector (status PREPARING) before starting.");
+      return;
+    }
+    const parsedLimit = limitValue ? Number(limitValue) : null;
+    const limitMissing = limitType && (parsedLimit === null || Number.isNaN(parsedLimit) || parsedLimit <= 0);
+    if (limitMissing) {
+      setError("Enter a positive limit to use with the selected limit type.");
+      return;
+    }
     try {
-      await onSubmit({ connectorId, idTag: idTag.trim() || "SIM" });
+      await onSubmit({
+        connectorId,
+        idTag: idTag.trim() || "SIM",
+        ...(limitType ? { limitType, userLimit: parsedLimit } : {})
+      });
     } catch (err) {
       if (err instanceof Error) {
         setError(err.message);
@@ -189,12 +226,91 @@ export const RemoteStartModal = ({
             </datalist>
           ) : null}
         </div>
+        <div className={styles.field}>
+          <label className={styles.label}>Charging limit (optional)</label>
+          <div className={styles.radioGroup}>
+            <label className={styles.radioOption}>
+              <input
+                type="radio"
+                className={styles.radio}
+                name="limit-type"
+                value=""
+                checked={limitType === ""}
+                onChange={() => setLimitType("")}
+                disabled={busy}
+              />
+              <div>
+                <span className={styles.radioTitle}>No limit</span>
+                <span className={styles.helper}>Start without enforcing a session cap.</span>
+              </div>
+            </label>
+            <label className={styles.radioOption}>
+              <input
+                type="radio"
+                className={styles.radio}
+                name="limit-type"
+                value="KWH"
+                checked={limitType === "KWH"}
+                onChange={() => setLimitType("KWH")}
+                disabled={busy}
+              />
+              <div>
+                <span className={styles.radioTitle}>Energy limit (kWh)</span>
+                <span className={styles.helper}>Stop when this amount of energy is delivered.</span>
+              </div>
+            </label>
+            <label className={styles.radioOption}>
+              <input
+                type="radio"
+                className={styles.radio}
+                name="limit-type"
+                value="AMOUNT"
+                checked={limitType === "AMOUNT"}
+                onChange={() => setLimitType("AMOUNT")}
+                disabled={busy}
+              />
+              <div>
+                <span className={styles.radioTitle}>Cost limit (amount)</span>
+                <span className={styles.helper}>Stop when the session cost reaches this amount.</span>
+              </div>
+            </label>
+          </div>
+          {limitType ? (
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor="limit-input">
+                {limitType === "KWH" ? "kWh limit" : "Amount limit"}
+              </label>
+              <input
+                id="limit-input"
+                type="number"
+                min="0"
+                step="0.001"
+                className={styles.input}
+                value={limitValue}
+                onChange={(event) => setLimitValue(event.target.value)}
+                disabled={busy}
+                placeholder={limitType === "KWH" ? "e.g. 5.0" : "e.g. 200.00"}
+              />
+              <span className={styles.helper}>
+                Enter a positive {limitType === "KWH" ? "kWh value" : "currency amount"} to cap the session.
+              </span>
+            </div>
+          ) : null}
+        </div>
         {error ? <span className={styles.error}>{error}</span> : null}
         <div className={styles.actions}>
           <Button type="button" variant="secondary" onClick={handleClose} disabled={busy}>
             Cancel
           </Button>
-          <Button type="submit" variant="primary" disabled={busy}>
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={
+              busy ||
+              !connectorPlugged ||
+              (limitType !== "" && (!limitValue || Number(limitValue) <= 0 || Number.isNaN(Number(limitValue))))
+            }
+          >
             {busy ? "Starting…" : "Start charging"}
           </Button>
         </div>
