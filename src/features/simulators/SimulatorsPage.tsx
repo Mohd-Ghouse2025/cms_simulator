@@ -174,6 +174,27 @@ export const SimulatorsPage = () => {
     refetchInterval: 10_000
   });
 
+  const patchSimulatorCaches = useCallback(
+    (simId: number, mutator: (sim: SimulatedCharger) => SimulatedCharger) => {
+      // Update paginated simulator lists
+      queryClient.setQueriesData<{ results: SimulatedCharger[]; count: number } | undefined>(
+        { queryKey: ["simulators"] },
+        (existing) => {
+          if (!existing) return existing;
+          const results = existing.results.map((item) => (item.id === simId ? mutator(item) : item));
+          return { ...existing, results };
+        }
+      );
+
+      // Update detail cache
+      queryClient.setQueryData<SimulatedCharger | undefined>(
+        queryKeys.simulatorDetail(simId),
+        (existing) => (existing ? mutator(existing) : existing)
+      );
+    },
+    [queryClient]
+  );
+
   const instancesBySimulator: Record<number, SimulatorInstance | null> = useMemo(() => {
     const map: Record<number, SimulatorInstance | null> = {};
     for (const instance of instanceQuery.data?.results ?? []) {
@@ -224,6 +245,34 @@ export const SimulatorsPage = () => {
           response = await api.request(endpoints.simulators.connect(simulator.id), {
             method: "POST"
           });
+          {
+            const payload = (response ?? {}) as { state?: string; instance?: SimulatorInstance };
+            const lifecycle = normalizeLifecycleState(payload.state) ?? "CONNECTING";
+            const instanceData = payload.instance;
+
+            patchSimulatorCaches(simulator.id, (current) => ({
+              ...current,
+              lifecycle_state: lifecycle,
+              latest_instance_status: instanceData?.status ?? current.latest_instance_status,
+              latest_instance_last_heartbeat: instanceData?.last_heartbeat ?? current.latest_instance_last_heartbeat,
+              cms_online: false,
+              cms_last_heartbeat: null
+            }));
+
+            if (instanceData) {
+              queryClient.setQueryData<{ results: SimulatorInstance[] } | undefined>(
+                queryKeys.simulatorInstances,
+                (existing) => {
+                  if (!existing) return existing;
+                  const filtered = (existing.results ?? []).filter((item) => item.id !== instanceData.id);
+                  return {
+                    ...existing,
+                    results: [instanceData, ...filtered].slice(0, INSTANCE_CACHE_LIMIT)
+                  };
+                }
+              );
+            }
+          }
           break;
         case "disconnect":
           response = await api.request(endpoints.simulators.disconnect(simulator.id), {
