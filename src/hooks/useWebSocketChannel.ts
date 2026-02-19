@@ -327,9 +327,6 @@ export const useWebSocketChannel = ({
     return () => {
       clearReconnectTimer();
       clearHeartbeat();
-      // In dev StrictMode the first render's cleanup runs immediately; keep the socket
-      // alive across rerenders while we still intend to connect, and only tear down when
-      // the caller truly disables the channel.
       if (!shouldConnect) {
         disposeSocket();
       }
