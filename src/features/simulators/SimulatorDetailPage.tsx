@@ -13,7 +13,6 @@ import {
   normalizeLifecycleState,
   type StatusTone
 } from "@/lib/simulatorLifecycle";
-import { formatLocalTimestamp } from "@/lib/time";
 import type { ConnectorTelemetrySnapshot, FaultDefinition } from "@/types";
 import { ConnectorStatus, SimulatedCharger, SimulatedSession } from "@/types";
 import { useSimulatorQueries } from "./hooks/useSimulatorQueries";
@@ -39,13 +38,12 @@ import {
 import { SimulatorHeader } from "./components/detail/SimulatorHeader";
 import { OverviewCard } from "./components/detail/OverviewCard";
 import { GraphCard } from "./components/detail/GraphCard";
-import { MeterCard } from "./components/detail/MeterCard";
 import { ConnectorCard } from "./components/detail/ConnectorCard";
 import { EventTimelineCard } from "./components/detail/EventTimelineCard";
 import { useConnectorSummaries } from "./hooks/useConnectorSummaries";
 import { formatNumber } from "./detail/detailHelpers";
 import { pickActiveConnectorId, resolveConnectorSelection } from "./utils/selection";
-import { formatCurrency } from "@/lib/currency";
+import { LiveMeterCardV2 } from "./components/detail/LiveMeterCardV2";
 
 type DetailResponse = SimulatedCharger;
 
@@ -122,6 +120,7 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
       patchSimulatorDetail((current) => {
         const connectors = current.connectors ?? [];
         let changed = false;
+        const nowIso = new Date().toISOString();
         const next = connectors.map((connector) => {
           if (connector.connector_id !== connectorId) {
             return connector;
@@ -131,11 +130,17 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
             normalizeConnectorStatus(connector.initial_status) ??
             (connector.initial_status as ConnectorStatus | undefined) ??
             "AVAILABLE";
-          if (connector.initial_status === resolvedStatus) {
+          const currentLive = connector.live_status ?? connector.initial_status;
+          if (currentLive === resolvedStatus) {
             return connector;
           }
           changed = true;
-          return { ...connector, initial_status: resolvedStatus as ConnectorStatus };
+          return {
+            ...connector,
+            live_status: resolvedStatus as ConnectorStatus,
+            live_status_at: nowIso,
+            live_status_source: "dashboard-event"
+          };
         });
         if (!changed) {
           return current;
@@ -679,74 +684,6 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     : connectorsConfigured
       ? "Waiting for simulator telemetry."
       : "No connectors configured.";
-  const meterInfoFields = primaryConnector
-    ? [
-        {
-          label: "Energy (kWh)",
-          value: `${primaryConnector.energyKwh.toFixed(3)}`,
-          hint:
-            primaryConnector.deltaKwh !== null
-              ? `+${primaryConnector.deltaKwh.toFixed(3)} kWh`
-              : null
-        },
-        {
-          label: "Meter Start",
-          value: `${primaryConnector.meterStartKwh.toFixed(3)} kWh`,
-          hint: `${(primaryConnector.meterStartKwh * 1000).toFixed(0)} Wh`
-        },
-        {
-          label: "Meter Stop",
-          value: `${primaryConnector.meterStopKwh.toFixed(3)} kWh`,
-          hint: `${(primaryConnector.meterStopKwh * 1000).toFixed(0)} Wh`
-        },
-        (() => {
-          const limitType = primaryConnector.limitType;
-          const userLimit = primaryConnector.userLimit;
-          if (!limitType || userLimit === null || userLimit === undefined) {
-            return { label: "Limit", value: "None" };
-          }
-          if (limitType === "KWH") {
-            return { label: "Limit", value: `${userLimit.toFixed(3)} kWh` };
-          }
-          if (limitType === "AMOUNT") {
-            return { label: "Limit", value: formatCurrency(userLimit) };
-          }
-          return { label: "Limit", value: "None" };
-        })(),
-        {
-          label: "Duration",
-          value: primaryConnector.duration ?? "—"
-        },
-        {
-          label: "Last Sample",
-          value: formatLocalTimestamp(primaryConnector.lastSampleAt, { withSeconds: true })
-        },
-        {
-          label: "Power",
-          value:
-            typeof primaryConnector.powerKw === "number"
-              ? `${formatNumber(primaryConnector.powerKw, { digits: 2 })} kW`
-              : "—"
-        },
-        {
-          label: "Current",
-          value:
-            typeof primaryConnector.current === "number"
-              ? `${formatNumber(primaryConnector.current, { digits: 1 })} A`
-              : "—"
-        },
-        {
-          label: "ID Tag",
-          value: primaryConnector.idTag ?? "—"
-        }
-      ]
-    : [];
-  const meterContextLabel = primaryConnector
-    ? `Connector #${primaryConnector.connectorId} · ${
-        primaryConnector.transactionId ? `CMS Tx ${primaryConnector.transactionId}` : "No CMS Tx"
-      } · ${primaryConnector.statusLabel}`
-    : null;
-
   return (
     <div className={styles.page}>
       <SimulatorHeader
@@ -814,14 +751,13 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
             setShowFaultModal(true);
           }}
         />
-        <MeterCard
+        <LiveMeterCardV2
           primaryConnector={primaryConnector}
-          meterContextLabel={meterContextLabel}
-          meterInfoFields={meterInfoFields}
-          meterPlaceholderMessage={meterPlaceholderMessage}
+          placeholderMessage={meterPlaceholderMessage}
           graphIsFrozen={graphIsFrozen}
           lastSampleIsStale={lastSampleIsStale}
           statusToneClassMap={statusToneClassMap}
+          meterIntervalSeconds={data?.default_meter_value_interval ?? null}
         />
         <GraphCard
           connectorsSummary={connectorsSummary}

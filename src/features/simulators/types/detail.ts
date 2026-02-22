@@ -27,6 +27,9 @@ export interface CmsChargingSession {
   energy_kwh?: number | null;
   price_per_kwh?: number | null;
   cost: number | null;
+  cost_final?: number | null;
+  cost_raw?: number | null;
+  payable_amount?: number | null;
   id_tag?: number | null;
   limit_type?: string | null;
   limit?: number | null;
@@ -129,6 +132,8 @@ export type ConnectorSummary = {
   lastUpdated: string | null;
   lastSampleAt: string | null;
   duration: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
   userLimit?: number | null;
   limitType?: "KWH" | "AMOUNT" | null;
   cmsSession?: CmsChargingSession;

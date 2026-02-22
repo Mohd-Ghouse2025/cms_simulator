@@ -55,12 +55,24 @@ import {
   toNumber
 } from "../detail/detailHelpers";
 
+const simDebugEnabled = () =>
+  process.env.NEXT_PUBLIC_SIM_DEBUG === "1" ||
+  process.env.NODE_ENV !== "production" ||
+  (typeof window !== "undefined" && window.localStorage.getItem("sim-debug") === "1");
+
+const simDebug = (label: string, payload?: unknown) => {
+  if (!simDebugEnabled()) return;
+  // eslint-disable-next-line no-console
+  console.info(`[simulator][${label}]`, payload ?? "");
+};
+
 const anchorKey = (connectorId: number, txId?: string | null) => `${connectorId}:${txId ?? "no-tx"}`;
 
 const pickEarliestIso = (candidates: Array<string | undefined | null>): string | null => {
+  const normalize = (value: string) => value.replace(/(\.\d{3})\d+/, "$1");
   const valid = candidates
     .filter((value): value is string => typeof value === "string" && value.length > 0)
-    .map((value) => ({ value, ts: Date.parse(value) }))
+    .map((value) => ({ value: normalize(value), ts: Date.parse(normalize(value)) }))
     .filter(({ ts }) => Number.isFinite(ts));
   if (!valid.length) return null;
   return valid.reduce((earliest, current) => (current.ts < earliest.ts ? current : earliest)).value;
@@ -102,6 +114,119 @@ import {
   formatConnectorStatusLabel,
   normalizeConnectorStatus
 } from "../utils/status";
+
+// Normalize transaction identifiers to `string | undefined` (never null) before storing in state.
+const normalizeTxId = (tx?: string | null) => (typeof tx === "string" && tx.trim().length ? tx : undefined);
+
+export const shouldPollTelemetry = ({
+  socketStatus,
+  lastWsMessageAt,
+  latestSampleTs,
+  staleThreshold,
+  hasActiveSession,
+  connectorStatuses,
+  hasTxWithoutSamples
+}: {
+  socketStatus: string;
+  lastWsMessageAt: number | null;
+  latestSampleTs: number | null;
+  staleThreshold: number;
+  hasActiveSession: boolean;
+  connectorStatuses: Array<string | null>;
+  hasTxWithoutSamples: boolean;
+}) => {
+  const now = Date.now();
+  // Treat a socket that never delivered a message as stale so we fall back to REST polling immediately.
+  const socketStale =
+    socketStatus !== "open" ||
+    lastWsMessageAt === null ||
+    (lastWsMessageAt !== null && now - lastWsMessageAt > staleThreshold);
+  const samplesStale = latestSampleTs === null || now - latestSampleTs > staleThreshold;
+  const connectorActive = connectorStatuses.some((status) => {
+    const normalized = normalizeConnectorStatus(status ?? "");
+    return normalized === "CHARGING" || normalized === "PREPARING" || normalized === "FINISHING";
+  });
+  if (socketStale || samplesStale) return true;
+  if (connectorActive) return true;
+  if (hasTxWithoutSamples) return true;
+  if (hasActiveSession && samplesStale) return true;
+  return false;
+};
+
+export type RuntimeStaleCheck = {
+  runtime?: SessionRuntime;
+  runtimeLastSampleTs: number | null;
+  existingLastSampleTs: number | null;
+  latestSampleTs: number | null;
+  staleThreshold: number;
+};
+
+export const isRuntimeStaleForRestSamples = ({
+  runtime,
+  runtimeLastSampleTs,
+  existingLastSampleTs,
+  latestSampleTs,
+  staleThreshold
+}: RuntimeStaleCheck): boolean => {
+  const activeStates = new Set(["authorized", "charging", "finishing", "preparing", "pending"]);
+  const runtimeActive = runtime && activeStates.has(runtime.state);
+  if (!runtimeActive) return true;
+  const lastSeen = runtimeLastSampleTs ?? existingLastSampleTs;
+  if (latestSampleTs !== null && lastSeen !== null && latestSampleTs - lastSeen > staleThreshold) return true;
+  if (latestSampleTs !== null && lastSeen === null) return true;
+  return false;
+};
+
+const coerceIso = (value?: string | null) => {
+  if (!value) return null;
+  const ts = Date.parse(value);
+  return Number.isFinite(ts) ? new Date(ts).toISOString() : null;
+};
+
+export const buildReconciledSession = (
+  existing: SessionRuntime,
+  {
+    connectorId,
+    tx,
+    meterStopWh,
+    completedAt,
+    finalSample
+  }: {
+    connectorId: number;
+    tx?: string | null;
+    meterStopWh?: number | null;
+    completedAt?: string | null;
+    finalSample?: NormalizedSample | null;
+  }
+): SessionRuntime => {
+  const normalizedTx = normalizeTxId(tx ?? existing.transactionId ?? existing.transactionKey ?? existing.cmsTransactionKey);
+  const meterStart = existing.meterStartWh ?? 0;
+  const stopCandidates = [
+    meterStopWh,
+    finalSample?.valueWh,
+    existing.meterStopWh,
+    existing.meterStopFinalWh,
+    meterStart
+  ].filter((val): val is number => typeof val === "number" && Number.isFinite(val));
+  const finalWh = stopCandidates.length ? Math.max(...stopCandidates) : meterStart;
+  const completedIso = coerceIso(completedAt) ?? finalSample?.isoTimestamp ?? existing.lastSampleAt ?? new Date().toISOString();
+  return {
+    ...existing,
+    connectorId,
+    transactionId: normalizedTx ?? existing.transactionId,
+    transactionKey: normalizedTx ?? existing.transactionKey,
+    cmsTransactionKey: normalizedTx ?? existing.cmsTransactionKey,
+    state: "completed",
+    completedAt: completedIso ?? existing.completedAt,
+    updatedAt: completedIso ?? existing.updatedAt,
+    meterStopWh: finalWh,
+    meterStopFinalWh: finalWh,
+    isFinal: true,
+    activeSession: false,
+    finalSample: finalSample ?? existing.finalSample ?? null,
+    lastSampleAt: completedIso ?? existing.lastSampleAt ?? null
+  };
+};
 
 export type UseSimulatorTelemetryArgs = {
   simulatorId: number;
@@ -177,14 +302,22 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
   const [sessionsByConnector, setSessionsByConnector] = useState<Record<number, SessionRuntime>>({});
   const [pendingLimitsByConnector, setPendingLimitsByConnector] = useState<Record<number, { limitType: "KWH" | "AMOUNT"; userLimit: number }>>({});
   const pendingLimitsRef = useRef<Record<number, { limitType: "KWH" | "AMOUNT"; userLimit: number }>>({});
+  const pendingSamplesRef = useRef<
+    Record<number, { samples: NormalizedSample[]; firstSeenMs: number; lastSeenMs: number }>
+  >({});
+  // Allow more headroom for auth delays but still bounded.
+  const BUFFER_MAX = 120;
+  const BUFFER_TTL_MS = 30_000;
   const [nowTs, setNowTs] = useState(() => Date.now());
   const [selectedConnectorId, setSelectedConnectorId] = useState<number | null>(null);
+  const [lastWsMessageAtState, setLastWsMessageAtState] = useState<number | null>(null);
 
   const timelineKeysRef = useRef<Set<string>>(new Set());
   const futureStartWarnedRef = useRef<Set<string>>(new Set());
   const telemetryThrottleRef = useRef<Record<number, number>>({});
   const sessionsRef = useRef<Record<number, SessionRuntime>>({});
   const frozenConnectorsRef = useRef<Set<number>>(new Set());
+  const meterTimelinesRef = useRef<Record<number, ConnectorMeterTimeline>>({});
   const meterStartCacheRef = useRef<Map<string, number>>(new Map());
   const sessionStartAnchorRef = useRef<Record<string, string>>({});
   const resetFlowRef = useRef<ResetFlowState | null>(null);
@@ -193,13 +326,20 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
   // Tracks the last time we attempted to hydrate an active session that was missing live telemetry.
   const lastActiveHydrateRef = useRef<Record<string, number>>({});
 
+  const trimToMillis = (iso?: string | null): string | null => {
+    if (!iso || typeof iso !== "string") return iso ?? null;
+    return iso.replace(/(\.\d{3})\d+/, "$1");
+  };
+
   const clampFutureStart = useCallback(
     (iso: string | null | undefined, connectorId?: number, transactionId?: string | null, reason?: string) => {
       if (!iso) return iso ?? undefined;
-      const parsed = Date.parse(iso);
-      if (!Number.isFinite(parsed)) return iso;
+      // Normalize any microsecond payloads to millisecond precision so Date.parse succeeds consistently.
+      const normalized = trimToMillis(iso) ?? iso;
+      const parsed = Date.parse(normalized);
+      if (!Number.isFinite(parsed)) return normalized ?? iso;
       const skewMs = parsed - Date.now();
-      if (skewMs <= 5000) return iso;
+      if (skewMs <= 5000) return normalized;
       const key = `${connectorId ?? "unknown"}:${transactionId ?? "no-tx"}:${reason ?? "start"}`;
       if (!futureStartWarnedRef.current.has(key) && process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
         futureStartWarnedRef.current.add(key);
@@ -295,13 +435,13 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
     return sessionStartAnchorRef.current[key] ?? null;
   }, []);
 
-  const deleteAnchor = (connectorId: number, transactionId?: string | null) => {
+  const deleteAnchor = useCallback((connectorId: number, transactionId?: string | null) => {
     if (!connectorId) return;
     const key = anchorKey(connectorId, transactionId);
     if (sessionStartAnchorRef.current[key]) {
       delete sessionStartAnchorRef.current[key];
     }
-  };
+  }, []);
 
   const migrateNoTxAnchor = (connectorId: number, transactionId?: string | null, fallbackStart?: string | null) => {
     return migrateNoTxAnchorValue(sessionStartAnchorRef.current, connectorId, transactionId, fallbackStart);
@@ -311,8 +451,9 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
     (map: Map<number, ConnectorTelemetryHistory>, normalizedBatches: Record<number, NormalizedSample[]>) => {
       map.forEach((history, connectorId) => {
         const samples = normalizedBatches[connectorId];
-        const transactionId =
-          history.transactionId ?? samples?.[0]?.transactionId ?? samples?.at(-1)?.transactionId ?? undefined;
+        const transactionId = normalizeTxId(
+          history.transactionId ?? samples?.[0]?.transactionId ?? samples?.at(-1)?.transactionId
+        );
         if (!transactionId) return;
         const historyStart = history.start_time ?? history.started_at ?? null;
         const sampleStart = samples?.[0]?.isoTimestamp ?? null;
@@ -390,6 +531,18 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
             previousSampleByConnector[connectorKey] = sample;
           });
         if (!Object.keys(normalizedByConnector).length) return;
+        Object.entries(normalizedByConnector).forEach(([key, samples]) => {
+          if (!samples.length) return;
+          const id = Number(key);
+          const firstTimestamp = samples[0]?.isoTimestamp ?? null;
+          const lastTimestamp = samples.at(-1)?.isoTimestamp ?? null;
+          simDebug("meter.hydrate", {
+            connectorId: id,
+            count: samples.length,
+            firstTimestamp,
+            lastTimestamp
+          });
+        });
         setMeterTimelines((current) => {
           const next = { ...current };
           Object.entries(normalizedByConnector).forEach(([key, samples]) => {
@@ -397,9 +550,10 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
             const id = Number(key);
             const bounded = limitTelemetryHistory(samples);
             const previous = next[id];
+            const nextTx = normalizeTxId(transactionId ?? previous?.transactionId);
             next[id] = {
-              transactionId: transactionId ?? previous?.transactionId,
-              transactionKey: transactionId ?? previous?.transactionKey,
+              transactionId: nextTx,
+              transactionKey: nextTx ?? previous?.transactionKey,
               samples: bounded
             };
           });
@@ -424,6 +578,7 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
     setTelemetryHistory({});
     setSessionsByConnector({});
     frozenConnectorsRef.current.clear();
+    pendingSamplesRef.current = {};
   }, [simulatorId]);
 
   useEffect(() => {
@@ -434,6 +589,10 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
   useEffect(() => {
     sessionsRef.current = sessionsByConnector;
   }, [sessionsByConnector]);
+
+  useEffect(() => {
+    meterTimelinesRef.current = meterTimelines;
+  }, [meterTimelines]);
 
   useEffect(() => {
     pendingLimitsRef.current = pendingLimitsByConnector;
@@ -483,6 +642,468 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
     return true;
   }, []);
 
+  const storeBufferedSample = useCallback(
+    (connectorId: number, sample: NormalizedSample) => {
+      const nowMs = Date.now();
+      const existing = pendingSamplesRef.current[connectorId];
+      if (existing && nowMs - existing.firstSeenMs > BUFFER_TTL_MS) {
+        delete pendingSamplesRef.current[connectorId];
+      }
+      const buffer =
+        pendingSamplesRef.current[connectorId] ??
+        { samples: [], firstSeenMs: nowMs, lastSeenMs: nowMs };
+      if (buffer.samples.length < BUFFER_MAX) {
+        buffer.samples.push(sample);
+      }
+      buffer.lastSeenMs = nowMs;
+      pendingSamplesRef.current[connectorId] = buffer;
+      if (process.env.NODE_ENV !== "production") {
+        // eslint-disable-next-line no-console
+        console.debug("[simulator][meter.buffer.store]", {
+          connectorId,
+          count: pendingSamplesRef.current[connectorId]?.samples.length ?? 0
+        });
+      }
+    },
+    []
+  );
+
+  const flushBufferedSamples = useCallback(
+    ({
+      connectorId,
+      tx,
+      anchorOverride,
+      activeTx
+    }: {
+      connectorId: number;
+      tx?: string | null;
+      anchorOverride?: string | null;
+      activeTx?: string | null;
+    }) => {
+      const normalizedTx = normalizeTxId(tx);
+      if (!normalizedTx) return;
+      const pending = pendingSamplesRef.current[connectorId];
+      if (!pending || !pending.samples.length) return;
+      const nowMs = Date.now();
+      const ageMs = nowMs - pending.firstSeenMs;
+      const runtimeState = sessionsRef.current[connectorId]?.state;
+      const activeRuntime = runtimeState === "authorized" || runtimeState === "charging" || runtimeState === "finishing";
+      const overCap = pending.samples.length > BUFFER_MAX;
+      const expired = (!activeRuntime && ageMs > BUFFER_TTL_MS) || overCap;
+      if (expired) {
+        delete pendingSamplesRef.current[connectorId];
+        if (process.env.NODE_ENV !== "production") {
+          // eslint-disable-next-line no-console
+          console.debug("[simulator][meter.buffer.drop]", {
+            connectorId,
+            reason: "expired",
+            ageMs,
+            activeTx,
+            targetTx: normalizedTx,
+            samples: pending.samples.length
+          });
+        }
+        return;
+      }
+      delete pendingSamplesRef.current[connectorId];
+      setMeterTimelines((current) => {
+        const existing = current[connectorId];
+        const baseSamples = existing?.samples ?? [];
+        if (baseSamples.length > 0) {
+          const patched = baseSamples.map((s) => (s.transactionId ? s : { ...s, transactionId: normalizedTx }));
+          return {
+            ...current,
+            [connectorId]: {
+              transactionId: normalizedTx,
+              transactionKey: normalizedTx ?? existing?.transactionKey,
+              samples: patched
+            }
+          };
+        }
+        const seen = new Set<string>();
+        const promoted: NormalizedSample[] = [];
+        pending.samples.forEach((sample) => {
+          const key = `${sample.isoTimestamp}:${sample.valueWh}:${sample.connectorId}`;
+          if (seen.has(key)) return;
+          seen.add(key);
+          promoted.push({ ...sample, transactionId: normalizedTx });
+        });
+        return {
+          ...current,
+          [connectorId]: {
+            transactionId: normalizedTx,
+            transactionKey: normalizedTx ?? existing?.transactionKey,
+            samples: promoted
+          }
+        };
+      });
+      setSessionsByConnector((current) => {
+        const existing = current[connectorId];
+        if (!existing) return current;
+        if (existing.transactionId && existing.transactionId === normalizedTx) return current;
+        return {
+          ...current,
+          [connectorId]: {
+            ...existing,
+            transactionId: normalizedTx,
+            transactionKey: normalizedTx ?? existing.transactionKey ?? undefined
+          }
+        };
+      });
+      if (process.env.NODE_ENV !== "production") {
+        // eslint-disable-next-line no-console
+        console.debug("[simulator][meter.buffer.flush]", {
+          connectorId,
+          tx: normalizedTx,
+          flushed: pending.samples.length
+        });
+      }
+    },
+    [BUFFER_TTL_MS, BUFFER_MAX]
+  );
+
+  const createApplySample = useCallback(
+    (
+      {
+        connectorId,
+        transactionId,
+        existingTx,
+        shouldSwitchToNewTx,
+        hasTimelineSamples,
+        noTxRestart,
+        migratedAnchor,
+        runtimeSnapshot
+      }: {
+        connectorId: number;
+        transactionId?: string | null;
+        existingTx?: string | null;
+        shouldSwitchToNewTx: boolean;
+        hasTimelineSamples: boolean;
+        noTxRestart: boolean;
+        migratedAnchor?: string | null;
+        runtimeSnapshot?: SessionRuntime;
+      }
+    ) =>
+      (sampleInput: NormalizedSample, forcedTx?: string, anchorOverride?: string | null) => {
+        if (shouldSwitchToNewTx) {
+          delete pendingSamplesRef.current[connectorId];
+        }
+        const txCandidate = normalizeTxId(forcedTx ?? sampleInput.transactionId ?? transactionId ?? existingTx);
+        let recordedSample: NormalizedSample | null = null;
+        setMeterTimelines((current) => {
+          const existing = current[connectorId];
+          const transactionToUse = txCandidate ?? normalizeTxId(existing?.transactionId ?? existingTx);
+          const samplesBase =
+            shouldSwitchToNewTx ||
+            (existing?.transactionId && transactionToUse && existing.transactionId !== transactionToUse)
+              ? []
+              : hasTimelineSamples && transactionId && !existing?.transactionId
+                ? []
+                : existing?.samples ?? [];
+          const previousSample = samplesBase.at(-1);
+          const normalizedSample = normalizeSample(sampleInput, previousSample);
+          recordedSample = normalizedSample;
+          const appended = appendSample(samplesBase, normalizedSample);
+          const updatedSamples = trimWindow(appended, TELEMETRY_WINDOW_MS);
+          return {
+            ...current,
+            [connectorId]: {
+              transactionId: transactionToUse,
+              transactionKey: transactionToUse ?? existing?.transactionKey,
+              samples: updatedSamples
+            }
+          };
+        });
+        if (!recordedSample) return;
+        const sample = recordedSample as NormalizedSample;
+        const resolvedTransaction = txCandidate ?? sample.transactionId ?? existingTx;
+        if (!resolvedTransaction && !noTxRestart) return;
+        if (resolvedTransaction) {
+          rememberMeterStart(resolvedTransaction, meterStartCacheRef.current.get(resolvedTransaction) ?? sample.valueWh);
+        }
+        let sampleLog: { connectorId: number; transactionId: string | null | undefined; existingTx: string | null | undefined; txChanged: boolean; startAnchor: string | null } | null = null;
+        setSessionsByConnector((current) => {
+          const existing = current[connectorId];
+          if (existing && existing.transactionId && resolvedTransaction !== existing.transactionId && !shouldSwitchToNewTx) return current;
+          const txChanged = Boolean(
+            existing &&
+              (hasTransactionChanged(existing.transactionId, resolvedTransaction) || noTxRestart) &&
+              shouldSwitchToNewTx
+          );
+          const normalizedTx = normalizeTxId(resolvedTransaction);
+          const sameTxExisting = existing && existing.transactionId === normalizedTx ? existing : undefined;
+          const runtimeStart =
+            !txChanged && sameTxExisting && typeof sameTxExisting.meterStartWh === "number"
+              ? sameTxExisting.meterStartWh
+              : undefined;
+          const meterStartWh =
+            resolveMeterStart(normalizedTx, runtimeStart, sample.valueWh) ??
+            runtimeStart ??
+            sample.valueWh ??
+            0;
+          const updatedStop = Math.max(sample.valueWh, meterStartWh, sameTxExisting?.meterStopWh ?? meterStartWh);
+          if (txChanged) {
+            deleteAnchor(connectorId, existing?.transactionId);
+            deleteAnchor(connectorId, null);
+            const startIso = anchorOverride ?? migratedAnchor ?? sample.isoTimestamp;
+            setStartAnchor(connectorId, normalizedTx, startIso, true, "meter.sample");
+            const pendingLimit = pendingLimitsRef.current[connectorId];
+            return {
+              ...current,
+              [connectorId]: {
+                connectorId,
+                transactionId: normalizedTx,
+                transactionKey: normalizedTx ?? sameTxExisting?.transactionKey,
+                cmsTransactionKey: normalizedTx ?? sameTxExisting?.cmsTransactionKey,
+                idTag: sameTxExisting?.idTag,
+                startedAt: startIso,
+                completedAt: undefined,
+                updatedAt: sample.isoTimestamp,
+                state: "charging",
+                meterStartWh,
+                meterStopWh: updatedStop,
+                meterStopFinalWh: undefined,
+                isFinal: false,
+                activeSession: true,
+                pricePerKwh: sameTxExisting?.pricePerKwh ?? data?.price_per_kwh ?? null,
+                maxKw: sameTxExisting?.maxKw ?? null,
+                cmsSessionId: sameTxExisting?.cmsSessionId ?? null,
+                userLimit: pendingLimit?.userLimit ?? null,
+                limitType: pendingLimit?.limitType ?? null,
+                finalSample: sample,
+                lastSampleAt: sample.isoTimestamp
+              }
+            };
+          }
+          if (!getStartAnchor(connectorId, normalizedTx)) {
+            setStartAnchor(
+              connectorId,
+              normalizedTx,
+              sameTxExisting?.startedAt ?? anchorOverride ?? migratedAnchor ?? sample.isoTimestamp,
+              false,
+              "meter.sample"
+            );
+          }
+          const firstSampleForTx = txChanged || !existing;
+          if (firstSampleForTx) {
+            sampleLog = {
+              connectorId,
+              transactionId: normalizedTx,
+              existingTx: existing?.transactionId ?? existingTx ?? null,
+              txChanged,
+              startAnchor: getStartAnchor(connectorId, normalizedTx)
+            };
+          }
+          return {
+            ...current,
+            [connectorId]: {
+              connectorId,
+              transactionId: normalizedTx,
+              transactionKey: normalizedTx ?? sameTxExisting?.transactionKey,
+              cmsTransactionKey: normalizedTx ?? sameTxExisting?.cmsTransactionKey,
+              idTag: sameTxExisting?.idTag,
+              startedAt: sameTxExisting?.startedAt ?? sample.isoTimestamp,
+              completedAt: sameTxExisting?.completedAt,
+              updatedAt: sample.isoTimestamp,
+              state: "charging",
+              meterStartWh,
+              meterStopWh: updatedStop,
+              meterStopFinalWh: sameTxExisting?.meterStopFinalWh,
+              isFinal: false,
+              activeSession: true,
+              pricePerKwh: sameTxExisting?.pricePerKwh ?? data?.price_per_kwh ?? null,
+              maxKw: sameTxExisting?.maxKw ?? null,
+              cmsSessionId: sameTxExisting?.cmsSessionId ?? null,
+              userLimit: sameTxExisting?.userLimit ?? null,
+              limitType: sameTxExisting?.limitType ?? null,
+              finalSample: sample,
+              lastSampleAt: sample.isoTimestamp
+            }
+          };
+        });
+        if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+          if (sampleLog) {
+            // eslint-disable-next-line no-console
+            console.debug("[simulator][meter.sample]", sampleLog);
+          }
+        }
+        frozenConnectorsRef.current.delete(connectorId);
+        appendTelemetrySample(connectorId, sample);
+        if (shouldRecordTelemetry(connectorId, sample.isoTimestamp)) {
+          const runtimeState = sessionsRef.current[connectorId]?.state;
+          const telemetryMetrics: TimelineMetric[] = [];
+          const powerLabel = `${sample.powerKw.toFixed(2)} kW`;
+          const currentLabel = `${sample.currentA.toFixed(1)} A`;
+          const energyValue = sample.energyKwh;
+          telemetryMetrics.push({ label: "Energy", value: `${formatNumber(energyValue, { digits: 3 })} kWh` });
+          telemetryMetrics.push({ label: "Power", value: powerLabel });
+          telemetryMetrics.push({ label: "Current", value: currentLabel, muted: true });
+          const runtimeStateLabel = runtimeState ? runtimeState.charAt(0).toUpperCase() + runtimeState.slice(1) : "Telemetry";
+          const txLabel = resolvedTransaction ?? runtimeSnapshot?.transactionId;
+          pushTimelineEvent({
+            dedupeKey: `meter:${connectorId}:${sample.isoTimestamp}:${resolvedTransaction ?? "no-tx"}`,
+            timestamp: sample.isoTimestamp,
+            kind: "meter",
+            title: "Telemetry update",
+            subtitle: `Connector #${connectorId}${txLabel ? ` · Tx ${txLabel}` : ""}`,
+            badge: runtimeStateLabel,
+            tone: "info",
+            icon: "gauge",
+            metrics: telemetryMetrics
+          });
+        }
+      },
+    [
+      appendTelemetrySample,
+      data?.price_per_kwh,
+      deleteAnchor,
+      formatNumber,
+      getStartAnchor,
+      rememberMeterStart,
+      resolveMeterStart,
+      setMeterTimelines,
+      setSessionsByConnector,
+      setStartAnchor,
+      shouldRecordTelemetry,
+      pushTimelineEvent
+    ]
+  );
+
+  const flushBufferedForTx = useCallback(
+    (connectorId: number, tx?: string | null) => {
+      const normalizedTx = normalizeTxId(tx);
+      if (!normalizedTx) return;
+      if (!pendingSamplesRef.current[connectorId]?.samples.length) return;
+      const runtimeSnapshot = sessionsRef.current[connectorId];
+      const timeline = meterTimelinesRef.current[connectorId];
+      const existingTx = runtimeSnapshot?.transactionId ?? timeline?.transactionId;
+      const migratedAnchor = getStartAnchor(connectorId, normalizedTx);
+      flushBufferedSamples({
+        connectorId,
+        tx: normalizedTx,
+        anchorOverride: migratedAnchor ?? runtimeSnapshot?.startedAt ?? null,
+        activeTx: existingTx ?? null
+      });
+    },
+    [flushBufferedSamples, getStartAnchor]
+  );
+
+  const reconcileStopFromRest = useCallback(
+    ({
+      connectorId,
+      tx,
+      meterStopWh,
+      completedAt,
+      finalSample
+    }: {
+      connectorId: number;
+      tx?: string | null;
+      meterStopWh?: number | null;
+      completedAt?: string | null;
+      finalSample?: NormalizedSample | null;
+    }) => {
+      const runtime = sessionsRef.current[connectorId];
+      if (!runtime) return;
+      const alreadyFinal = runtime.isFinal || runtime.state === "completed";
+      const resolvedSample = finalSample ?? runtime.finalSample ?? meterTimelinesRef.current[connectorId]?.samples?.at(-1) ?? null;
+      const finalValueWh = meterStopWh ?? resolvedSample?.valueWh ?? runtime.meterStopWh ?? runtime.meterStartWh ?? 0;
+      const reconciled = buildReconciledSession(runtime, {
+        connectorId,
+        tx,
+        meterStopWh: finalValueWh,
+        completedAt,
+        finalSample: resolvedSample
+      });
+      if (alreadyFinal && (runtime.meterStopFinalWh ?? runtime.meterStopWh ?? 0) >= finalValueWh) return;
+      const timelineSamples = meterTimelinesRef.current[connectorId]?.samples ?? [];
+      const hasSample = resolvedSample
+        ? timelineSamples.some(
+            (s) =>
+              s.valueWh === resolvedSample.valueWh &&
+              s.isoTimestamp === resolvedSample.isoTimestamp &&
+              (resolvedSample.transactionId ?? tx ?? runtime.transactionId ?? null) === (s.transactionId ?? null)
+          )
+        : false;
+      if (resolvedSample && !hasSample) {
+        setMeterTimelines((current) => {
+          const existing = current[connectorId];
+          const normalizedTx = normalizeTxId(resolvedSample.transactionId ?? tx ?? existing?.transactionId);
+          const appended = appendSample(existing?.samples ?? [], {
+            ...resolvedSample,
+            transactionId: resolvedSample.transactionId ?? normalizedTx ?? existing?.transactionId
+          });
+          return {
+            ...current,
+            [connectorId]: {
+              transactionId: normalizedTx ?? existing?.transactionId,
+              transactionKey: normalizedTx ?? existing?.transactionKey,
+              samples: trimWindow(appended, TELEMETRY_WINDOW_MS)
+            }
+          };
+        });
+        appendTelemetrySample(connectorId, resolvedSample);
+      }
+
+      // Keep refs aligned even if already final, so later promotions see newest state.
+      sessionsRef.current[connectorId] = reconciled;
+      setSessionsByConnector((current) => {
+        const existing = current[connectorId] ?? runtime;
+        const updated = buildReconciledSession(existing, {
+          connectorId,
+          tx,
+          meterStopWh: finalValueWh,
+          completedAt,
+          finalSample: resolvedSample
+        });
+        sessionsRef.current[connectorId] = updated;
+        return { ...current, [connectorId]: updated };
+      });
+      patchConnectorStatus(connectorId, "AVAILABLE");
+      patchTelemetrySnapshot(connectorId, {
+        transactionId: tx ?? runtime.transactionId ?? undefined,
+        state: "COMPLETED",
+        meterStopWh: Number.isFinite(finalValueWh) ? finalValueWh : undefined,
+        meterStopFinalWh: Number.isFinite(finalValueWh) ? finalValueWh : undefined,
+        isFinal: true,
+        lastSample: snapshotPayloadFromSample(resolvedSample ?? runtime.finalSample ?? undefined)
+      });
+      if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+        // eslint-disable-next-line no-console
+        console.debug("[simulator][rest.stop.reconcile]", {
+          connectorId,
+          tx: tx ?? runtime.transactionId ?? null,
+          meterStopWh: finalValueWh,
+          completedAt: completedAt ?? resolvedSample?.isoTimestamp ?? null
+        });
+      }
+    },
+    [appendTelemetrySample, patchConnectorStatus, patchTelemetrySnapshot]
+  );
+
+  // Whenever a runtime session gains a transactionId, flush any buffered no-tx samples immediately.
+  useEffect(() => {
+    Object.entries(sessionsByConnector).forEach(([key, runtime]) => {
+      const connectorId = Number(key);
+      if (!Number.isFinite(connectorId) || connectorId <= 0) return;
+      if (!pendingSamplesRef.current[connectorId]?.samples.length) return;
+      const tx = normalizeTxId(runtime.transactionId ?? runtime.transactionKey ?? runtime.cmsTransactionKey);
+      if (!tx) return;
+      flushBufferedForTx(connectorId, tx);
+    });
+  }, [sessionsByConnector, flushBufferedForTx]);
+
+  // Also flush when meter timelines are hydrated with a transactionId (e.g., via snapshots/history).
+  useEffect(() => {
+    const pendingKeys = Object.keys(pendingSamplesRef.current);
+    pendingKeys.forEach((key) => {
+      const connectorId = Number(key);
+      if (!Number.isFinite(connectorId) || connectorId <= 0) return;
+      const timelineTx = normalizeTxId(meterTimelinesRef.current[connectorId]?.transactionId);
+      if (!timelineTx) return;
+      flushBufferedForTx(connectorId, timelineTx);
+    });
+  }, [meterTimelines, flushBufferedForTx]);
+
   const telemetryHydrationEffect = useCallback(() => {
     if (!telemetryHistoryMap.size || telemetryHydrated) return;
     const historyBatches: Record<number, NormalizedSample[]> = {};
@@ -511,7 +1132,9 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
         return normalized;
       });
       if (!normalizedSamples.length) return;
-      const historyTransaction = history.transactionId ?? normalizedSamples.at(-1)?.transactionId ?? normalizedSamples[0]?.transactionId;
+      const historyTransaction = normalizeTxId(
+        history.transactionId ?? normalizedSamples.at(-1)?.transactionId ?? normalizedSamples[0]?.transactionId
+      );
       if (historyTransaction) {
         rememberMeterStart(historyTransaction, history.meterStartWh ?? normalizedSamples[0]?.valueWh);
       }
@@ -531,11 +1154,12 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
         const samples = historyBatches[connectorId];
         const finalSample = samples?.at(-1) ?? null;
         const existing = next[connectorId];
-        const transactionId =
+        const transactionId = normalizeTxId(
           history.transactionId ??
-          finalSample?.transactionId ??
-          samples?.[0]?.transactionId ??
-          existing?.transactionId;
+            finalSample?.transactionId ??
+            samples?.[0]?.transactionId ??
+            existing?.transactionId
+        );
         const existingSameTx = existing && transactionId && existing.transactionId === transactionId ? existing : undefined;
         const historyStart = history.start_time ?? history.started_at ?? undefined;
         const historyEnd = history.end_time ?? history.completed_at ?? undefined;
@@ -594,7 +1218,7 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
           snapshotHistory[connectorId].push(sample);
         }
         const existing = next[connectorId];
-        const transactionId = snapshot.transactionId ?? sample?.transactionId ?? existing?.transactionId;
+        const transactionId = normalizeTxId(snapshot.transactionId ?? sample?.transactionId ?? existing?.transactionId);
         const existingSameTx = existing && transactionId && existing.transactionId === transactionId ? existing : undefined;
         rememberMeterStart(transactionId, snapshot.meterStartWh ?? sample?.valueWh);
         const resolvedState = (snapshot.state as SessionLifecycle) ?? existing?.state ?? "idle";
@@ -638,7 +1262,7 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
         const sample = recordedSamples?.[recordedSamples.length - 1] ?? buildSnapshotSample(connectorId, snapshot.lastMeterSample ?? snapshot.lastSample);
         if (!sample) return;
         const existing = next[connectorId];
-        const transactionId = snapshot.transactionId ?? sample.transactionId ?? existing?.transactionId;
+        const transactionId = normalizeTxId(snapshot.transactionId ?? sample.transactionId ?? existing?.transactionId);
         const shouldReplace = !existing || existing.transactionId !== transactionId || !existing.samples.length;
         next[connectorId] = {
           transactionId,
@@ -682,7 +1306,17 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
           const incomingStart = session.started_at ?? session.created_at ?? undefined;
           const completedAt = session.completed_at ?? existing?.completedAt;
           const meterStartWh = session.meter_start_wh ?? existing?.meterStartWh;
-          const meterStopWh = session.meter_stop_wh ?? existing?.meterStopWh;
+          const meterStopWh = (() => {
+            const incoming = session.meter_stop_wh;
+            if (typeof incoming === "number" && Number.isFinite(incoming)) {
+              const baseline = existing?.meterStopWh ?? existing?.meterStartWh ?? null;
+              if (baseline !== null && Number.isFinite(baseline)) {
+                return Math.max(incoming, baseline);
+              }
+              return incoming;
+            }
+            return existing?.meterStopWh;
+          })();
           const metadata = (session.metadata ?? {}) as Record<string, unknown>;
           const metaLimitType = metadata.limit_type ?? metadata.limitType;
           const metaUserLimit = metadata.user_limit ?? metadata.userLimit;
@@ -734,7 +1368,9 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
           const existingActive =
             Boolean(existing?.activeSession) ||
             (existing?.state === "authorized" || existing?.state === "charging" || existing?.state === "finishing");
-          if (existing && txChanged && existingActive && !incomingActive) {
+          const incomingCompleted = state === "completed" || Boolean(completedAt);
+          const incomingNewer = completedAt && existing?.lastSampleAt ? Date.parse(completedAt) > Date.parse(existing.lastSampleAt) : true;
+          if (existing && txChanged && existingActive && !incomingActive && !(incomingCompleted && incomingNewer)) {
             return;
           }
 
@@ -783,11 +1419,21 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
             userLimit: isSameTx ? userLimit ?? existing?.userLimit ?? null : userLimit ?? null,
             limitType: isSameTx ? limitType ?? existing?.limitType ?? null : limitType ?? null
           };
+
+          if (incomingCompleted) {
+            reconcileStopFromRest({
+              connectorId,
+              tx: incomingTx,
+              meterStopWh,
+              completedAt: completedAt ?? null,
+              finalSample: existing?.finalSample ?? null
+            });
+          }
         });
         return next;
       });
     },
-    [clampFutureStart, data?.price_per_kwh, rememberMeterStart, resolveConnectorNumber, simulatorConnectorByPk]
+    [clampFutureStart, data?.price_per_kwh, rememberMeterStart, resolveConnectorNumber, simulatorConnectorByPk, reconcileStopFromRest]
   );
 
   useEffect(() => {
@@ -809,6 +1455,9 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
     const targetTxByConnector = new Map<number, string | null | undefined>();
     // Prefer the newest transaction per connector so we don't pin to an old session
     const latestTxByConnector = new Map<number, string | null>();
+    const stalePromotions: Array<{ connectorId: number; newTx: string; latestSample: NormalizedSample }> = [];
+    const meterIntervalMs = Math.max((data?.default_meter_value_interval ?? 5) * 1000, 3000);
+    const staleThreshold = meterIntervalMs * 2;
     [...results]
       .sort((a, b) => new Date(b.sampledAt).getTime() - new Date(a.sampledAt).getTime())
       .forEach((reading) => {
@@ -860,12 +1509,70 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
             null;
           targetTxByConnector.set(connectorId, targetTransaction);
         }
-        if (targetTransaction && sampleTransaction && targetTransaction !== sampleTransaction) return;
+        if (targetTransaction && sampleTransaction && targetTransaction !== sampleTransaction) {
+          const runtime = sessionSnapshot[connectorId];
+          const runtimeLastSampleTs = runtime?.lastSampleAt ? Date.parse(runtime.lastSampleAt) : null;
+          const existingLastSampleTs = existingTimeline?.samples?.at(-1)?.timestamp ?? null;
+          const latestSampleTs = Date.parse(reading.sampledAt);
+          const stale = isRuntimeStaleForRestSamples({
+            runtime,
+            runtimeLastSampleTs,
+            existingLastSampleTs,
+            latestSampleTs,
+            staleThreshold
+          });
+          if (!stale) {
+            if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+              // eslint-disable-next-line no-console
+              console.debug("[simulator][meter.hydrate.skip]", {
+                connectorId,
+                targetTransaction,
+                sampleTransaction,
+                runtimeState: runtime?.state,
+                runtimeLastSampleTs,
+                existingLastSampleTs,
+                latestSampleTs
+              });
+            }
+            return;
+          }
+          // Promote to the REST tx when runtime is stale
+          targetTransaction = sampleTransaction ?? targetTransaction;
+          targetTxByConnector.set(connectorId, targetTransaction);
+          if (sampleTransaction) {
+            const normalizedLatest = normalizeSample(
+              {
+                connectorId,
+                timestamp: reading.sampledAt,
+                valueWh: reading.valueWh,
+                powerKw: toNumber(payloadRecord.powerKw ?? payloadRecord.power_kw ?? payloadRecord.power),
+                currentA: toNumber(payloadRecord.currentA ?? payloadRecord.current_a ?? payloadRecord.current),
+                voltageV: toNumber(payloadRecord.voltageV ?? payloadRecord.voltage_v ?? payloadRecord.voltage),
+                energyKwh:
+                  toNumber(payloadRecord.energyKwh ?? payloadRecord.energy_kwh) ?? Number((reading.valueWh / 1000).toFixed(3)),
+                transactionId: sampleTransaction
+              },
+              existingTimeline?.samples?.at(-1)
+            );
+            stalePromotions.push({ connectorId, newTx: sampleTransaction, latestSample: normalizedLatest });
+            delete pendingSamplesRef.current[connectorId];
+            frozenConnectorsRef.current.delete(connectorId);
+            if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+              // eslint-disable-next-line no-console
+              console.debug("[simulator][meter.hydrate.promote]", {
+                connectorId,
+                from: targetTransaction,
+                to: sampleTransaction,
+                latestSampleTs
+              });
+            }
+          }
+        }
         if (!targetTransaction && sampleTransaction) {
           targetTransaction = sampleTransaction;
           targetTxByConnector.set(connectorId, targetTransaction);
         }
-        const transactionId = targetTransaction ?? sampleTransaction ?? runtimeTransaction ?? existingTransaction;
+        const transactionId = normalizeTxId(targetTransaction ?? sampleTransaction ?? runtimeTransaction ?? existingTransaction);
         if (!transactionId) return;
         const raw = {
           connectorId,
@@ -899,7 +1606,54 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
       return draft;
     });
     if (Object.keys(historyBatches).length) applyTelemetryHistory(historyBatches);
-  }, [meterValuesResults, applyTelemetryHistory, rememberMeterStart]);
+
+    if (stalePromotions.length) {
+      setSessionsByConnector((current) => {
+        const next = { ...current };
+        stalePromotions.forEach(({ connectorId, newTx, latestSample }) => {
+          const existing = next[connectorId];
+          const normalizedTx = normalizeTxId(newTx);
+          const meterStartWh = resolveMeterStart(normalizedTx, existing?.meterStartWh, latestSample.valueWh) ?? existing?.meterStartWh ?? latestSample.valueWh;
+          const meterStopWh = Math.max(latestSample.valueWh, meterStartWh ?? 0, existing?.meterStopWh ?? 0);
+          deleteAnchor(connectorId, existing?.transactionId ?? null);
+          deleteAnchor(connectorId, null);
+          setStartAnchor(connectorId, normalizedTx, latestSample.isoTimestamp, true, "meter-values-promote");
+          next[connectorId] = {
+            connectorId,
+            transactionId: normalizedTx ?? existing?.transactionId,
+            transactionKey: normalizedTx ?? existing?.transactionKey,
+            cmsTransactionKey: normalizedTx ?? existing?.cmsTransactionKey,
+            idTag: existing?.idTag,
+            startedAt: existing?.startedAt ?? latestSample.isoTimestamp,
+            completedAt: existing?.completedAt,
+            updatedAt: latestSample.isoTimestamp,
+            state: "charging",
+            meterStartWh: meterStartWh ?? 0,
+            meterStopWh,
+            meterStopFinalWh: existing?.meterStopFinalWh,
+            isFinal: false,
+            activeSession: true,
+            pricePerKwh: existing?.pricePerKwh ?? data?.price_per_kwh ?? null,
+            maxKw: existing?.maxKw ?? null,
+            cmsSessionId: existing?.cmsSessionId ?? null,
+            userLimit: existing?.userLimit ?? null,
+            limitType: existing?.limitType ?? null,
+            finalSample: existing?.finalSample ?? null,
+            lastSampleAt: latestSample.isoTimestamp
+          } as SessionRuntime;
+        });
+        return next;
+      });
+    }
+  }, [
+    meterValuesResults,
+    applyTelemetryHistory,
+    rememberMeterStart,
+    data?.default_meter_value_interval,
+    resolveMeterStart,
+    deleteAnchor,
+    setStartAnchor
+  ]);
 
   useEffect(() => {
     const sessions = cmsSessionsIndex.byId ? Array.from(cmsSessionsIndex.byId.values()) : [];
@@ -1095,52 +1849,121 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
           break;
         }
         case "meter.sample": {
-          const connectorIdRaw = event.connectorId as number | string | undefined;
+          const connectorIdRaw = (event.connectorId ?? (event as Record<string, unknown>).connector_id) as number | string | undefined;
           const connectorId = Number(connectorIdRaw);
           if (!Number.isFinite(connectorId) || connectorId <= 0) return;
-          const valueWh = Number(event.valueWh ?? event.value);
-          if (!Number.isFinite(valueWh)) return;
-          const rawTransactionId = event.transactionId as string | number | undefined;
-        const transactionId = resolveEventTransactionId(rawTransactionId);
-        const deltaWh = toNumber(event.deltaWh);
-        const powerKw = toNumber(event.powerKw ?? event.power);
-        const voltageV = toNumber(event.voltageV ?? event.voltage);
-        const currentA = toNumber(event.currentA ?? event.current);
-        const energyKwh = toNumber(event.energyKwh);
-        const intervalSeconds = toNumber(event.intervalSeconds ?? event.interval);
-        const sampleTimestamp = typeof event.sampleTimestamp === "string" ? event.sampleTimestamp : typeof event.timestamp === "string" ? event.timestamp : new Date().toISOString();
-        const sampleTimestampMs = Date.parse(sampleTimestamp);
-        const runtimeSnapshot = sessionsRef.current[connectorId];
-        const existingTimeline = meterTimelines[connectorId];
-        const existingTx = runtimeSnapshot?.transactionId ?? existingTimeline?.transactionId;
-        const migratedAnchor = transactionId ? migrateNoTxAnchor(connectorId, transactionId, sampleTimestamp) : null;
-        const lastSampleIso = runtimeSnapshot?.lastSampleAt ?? runtimeSnapshot?.finalSample?.isoTimestamp ?? existingTimeline?.samples?.at(-1)?.isoTimestamp ?? null;
-        const lastSampleTs = lastSampleIso ? Date.parse(lastSampleIso) : null;
-        const isFrozen = frozenConnectorsRef.current.has(connectorId);
-        const isDifferentTx = Boolean(transactionId && existingTx && transactionId !== existingTx);
-        const isSampleNewer = lastSampleTs === null || (sampleTimestampMs && sampleTimestampMs >= lastSampleTs);
-        const noTxRestart =
-          !transactionId &&
-          runtimeSnapshot &&
-          (runtimeSnapshot.isFinal || runtimeSnapshot.state === "completed") &&
-          isSampleNewer;
-        const shouldSwitchToNewTx =
-          (Boolean(transactionId) && isDifferentTx && (isSampleNewer || isFrozen || !runtimeSnapshot || runtimeSnapshot.isFinal || runtimeSnapshot.state === "completed")) ||
-          noTxRestart;
-        if (transactionId && isDifferentTx && !shouldSwitchToNewTx) return;
-        if (isFrozen && !shouldSwitchToNewTx && (!transactionId || transactionId === existingTx)) return;
-        let recordedSample: NormalizedSample | null = null;
-        setMeterTimelines((current) => {
-          const existing = current[connectorId];
-          const transactionToUse = transactionId ?? (noTxRestart ? undefined : existing?.transactionId ?? existingTx);
-          const samplesBase = shouldSwitchToNewTx || (existing?.transactionId && transactionToUse && existing.transactionId !== transactionToUse)
-            ? []
-            : existing?.samples ?? [];
-          const previousSample = samplesBase.at(-1);
-          const normalizedSample = normalizeSample(
+
+          // Accept both camelCase and snake_case payloads and derive a usable
+          // watt‑hour reading even when upstream omits valueWh. Some runtimes
+          // only send energyKwh or power/delta values, which previously left the
+          // meter card stuck until a hard refresh.
+          const rawEnergyKwh = toNumber((event as Record<string, unknown>).energyKwh ?? (event as Record<string, unknown>).energy_kwh);
+          const previousSample = meterTimelines[connectorId]?.samples.at(-1);
+          const previousWh = previousSample?.valueWh;
+
+          let valueWh = toNumber((event as Record<string, unknown>).valueWh ?? (event as Record<string, unknown>).value_wh ?? (event as Record<string, unknown>).value);
+          if (!Number.isFinite(valueWh) && Number.isFinite(rawEnergyKwh)) {
+            valueWh = (rawEnergyKwh as number) * 1000;
+          }
+          if (Number.isFinite(valueWh) && Number.isFinite(previousWh) && (valueWh as number) < (previousWh as number) && Number.isFinite(rawEnergyKwh)) {
+            // Guard against unit/scale mismatches (e.g., kWh broadcast for valueWh)
+            const derivedWh = (rawEnergyKwh as number) * 1000;
+            if (derivedWh > (previousWh as number)) {
+              valueWh = derivedWh;
+            } else {
+              valueWh = previousWh as number;
+            }
+          }
+          if (typeof valueWh !== "number" || Number.isNaN(valueWh)) return;
+
+          const rawTransactionId = (event.transactionId as string | number | undefined) ?? (event as Record<string, unknown>).transaction_id as string | number | undefined;
+          const transactionId = resolveEventTransactionId(rawTransactionId);
+          const deltaWh = toNumber((event as Record<string, unknown>).deltaWh ?? (event as Record<string, unknown>).delta_wh);
+          const powerKw = toNumber((event as Record<string, unknown>).powerKw ?? (event as Record<string, unknown>).power_kw ?? (event as Record<string, unknown>).power);
+          const voltageV = toNumber((event as Record<string, unknown>).voltageV ?? (event as Record<string, unknown>).voltage_v ?? (event as Record<string, unknown>).voltage);
+          const currentA = toNumber((event as Record<string, unknown>).currentA ?? (event as Record<string, unknown>).current_a ?? (event as Record<string, unknown>).current);
+          const energyKwh = rawEnergyKwh ?? toNumber((valueWh as number) / 1000);
+          const intervalSeconds = toNumber((event as Record<string, unknown>).intervalSeconds ?? (event as Record<string, unknown>).interval_seconds ?? (event as Record<string, unknown>).interval);
+          const sampleTimestamp: string = (() : string => {
+            const candidate =
+              typeof event.sampleTimestamp === "string"
+                ? event.sampleTimestamp
+                : typeof (event as Record<string, unknown>).sample_timestamp === "string"
+                  ? (event as Record<string, unknown>).sample_timestamp
+                  : typeof event.timestamp === "string"
+                    ? event.timestamp
+                    : null;
+            return typeof candidate === "string" ? candidate : new Date().toISOString();
+          })();
+          const sampleTimestampMs = Date.parse(sampleTimestamp);
+
+          const runtimeSnapshot = sessionsRef.current[connectorId];
+          const existingTimeline = meterTimelines[connectorId];
+          const existingTx = runtimeSnapshot?.transactionId ?? existingTimeline?.transactionId;
+          const hasTimelineSamples = Boolean(existingTimeline?.samples?.length);
+          const migratedAnchor = transactionId ? migrateNoTxAnchor(connectorId, transactionId, sampleTimestamp) : null;
+          const lastSampleIso =
+            runtimeSnapshot?.lastSampleAt ??
+            runtimeSnapshot?.finalSample?.isoTimestamp ??
+            existingTimeline?.samples?.at(-1)?.isoTimestamp ??
+            null;
+          const lastSampleTs = lastSampleIso ? Date.parse(lastSampleIso) : null;
+          const isFrozen = frozenConnectorsRef.current.has(connectorId);
+          const isDifferentTx = Boolean(transactionId && existingTx && transactionId !== existingTx);
+          const isSampleNewer = lastSampleTs === null || (sampleTimestampMs && sampleTimestampMs >= lastSampleTs);
+          const noTxRestart = Boolean(
+            !transactionId &&
+              runtimeSnapshot &&
+              (runtimeSnapshot.isFinal || runtimeSnapshot.state === "completed") &&
+              isSampleNewer
+          );
+          const shouldSwitchToNewTx = Boolean(
+            (Boolean(transactionId) &&
+              isDifferentTx &&
+              (isSampleNewer || isFrozen || !runtimeSnapshot || runtimeSnapshot.isFinal || runtimeSnapshot.state === "completed")) ||
+              (Boolean(transactionId) && hasTimelineSamples && !existingTimeline?.transactionId) ||
+              noTxRestart
+          );
+          if (transactionId && isDifferentTx && !shouldSwitchToNewTx) return;
+          if (isFrozen && !shouldSwitchToNewTx && (!transactionId || transactionId === existingTx)) return;
+
+          const resolvedTx = transactionId ?? existingTx;
+          if (resolvedTx) {
+            // Seed baseline immediately so energy/duration render without waiting for StartTransaction hydrate.
+            rememberMeterStart(resolvedTx, valueWh);
+            if (!getStartAnchor(connectorId, resolvedTx)) {
+              setStartAnchor(connectorId, resolvedTx, sampleTimestamp, false, "meter.sample.inline");
+            }
+          }
+
+          const applySample = createApplySample({
+            connectorId,
+            transactionId,
+            existingTx,
+            shouldSwitchToNewTx,
+            hasTimelineSamples,
+            noTxRestart,
+            migratedAnchor,
+            runtimeSnapshot
+          });
+
+          // Flush buffered samples either when a tx arrives or when the first tx-tagged sample shows up
+          if (resolvedTx) {
+            flushBufferedSamples({
+              connectorId,
+              tx: resolvedTx,
+              anchorOverride: getStartAnchor(connectorId, resolvedTx) ?? null,
+              activeTx: existingTx ?? runtimeSnapshot?.transactionId ?? null
+            });
+          }
+
+          if (!resolvedTx) {
+            // Always buffer no-tx samples (even if connector not yet active) to avoid drops before runtime exists,
+            // and also project them into the live timeline so the UI updates immediately.
+            const normalized = normalizeSample(
               {
                 connectorId,
-                timestamp: sampleTimestamp,
+                timestamp: sampleTimestamp ?? undefined,
                 valueWh,
                 deltaWh,
                 intervalSeconds,
@@ -1148,152 +1971,57 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
                 currentA,
                 voltageV,
                 energyKwh,
-                transactionId: transactionToUse
+                transactionId: undefined
               },
-              previousSample
+              pendingSamplesRef.current[connectorId]?.samples.at(-1)
             );
-            recordedSample = normalizedSample;
-            const appended = appendSample(samplesBase, normalizedSample);
-            const updatedSamples = trimWindow(appended, TELEMETRY_WINDOW_MS);
-            return {
-              ...current,
-              [connectorId]: {
-                transactionId: transactionToUse,
-                transactionKey: transactionToUse ?? existing?.transactionKey,
-                samples: updatedSamples
-              }
-            };
-          });
-          if (!recordedSample) return;
-        const sample = recordedSample as NormalizedSample;
-        const resolvedTransaction = transactionId ?? sample.transactionId ?? existingTx;
-        if (!resolvedTransaction && !noTxRestart) return;
-        if (resolvedTransaction) {
-          rememberMeterStart(resolvedTransaction, meterStartCacheRef.current.get(resolvedTransaction) ?? sample.valueWh);
-        }
-        let sampleLog: { connectorId: number; transactionId: string | null | undefined; existingTx: string | null | undefined; txChanged: boolean; startAnchor: string | null } | null = null;
-        setSessionsByConnector((current) => {
-          const existing = current[connectorId];
-          if (existing && existing.transactionId && resolvedTransaction !== existing.transactionId && !shouldSwitchToNewTx) return current;
-          const txChanged = Boolean(
-            existing &&
-              (hasTransactionChanged(existing.transactionId, resolvedTransaction) || noTxRestart) &&
-              shouldSwitchToNewTx
-          );
-          const sameTxExisting = existing && existing.transactionId === resolvedTransaction ? existing : undefined;
-          const runtimeStart = !txChanged && sameTxExisting && typeof sameTxExisting.meterStartWh === "number" ? sameTxExisting.meterStartWh : undefined;
-          const meterStartWh = resolveMeterStart(resolvedTransaction, runtimeStart, sample.valueWh) ?? runtimeStart ?? sample.valueWh ?? 0;
-          const updatedStop = Math.max(sample.valueWh, meterStartWh, sameTxExisting?.meterStopWh ?? meterStartWh);
-          if (txChanged) {
-            deleteAnchor(connectorId, existing?.transactionId);
-            deleteAnchor(connectorId, null);
-            const startIso = migratedAnchor ?? sample.isoTimestamp;
-            setStartAnchor(connectorId, resolvedTransaction, startIso, true, "meter.sample");
-            const pendingLimit = pendingLimitsRef.current[connectorId];
-            return {
-              ...current,
-              [connectorId]: {
-                connectorId,
-                transactionId: resolvedTransaction,
-                transactionKey: resolvedTransaction ?? sameTxExisting?.transactionKey,
-                cmsTransactionKey: resolvedTransaction ?? sameTxExisting?.cmsTransactionKey,
-                idTag: sameTxExisting?.idTag,
-                startedAt: startIso,
-                completedAt: undefined,
-                updatedAt: sample.isoTimestamp,
-                state: "charging",
-                meterStartWh,
-                meterStopWh: updatedStop,
-                meterStopFinalWh: undefined,
-                isFinal: false,
-                activeSession: true,
-                pricePerKwh: sameTxExisting?.pricePerKwh ?? data?.price_per_kwh ?? null,
-                maxKw: sameTxExisting?.maxKw ?? null,
-                cmsSessionId: sameTxExisting?.cmsSessionId ?? null,
-                userLimit: pendingLimit?.userLimit ?? null,
-                limitType: pendingLimit?.limitType ?? null,
-                finalSample: sample,
-                lastSampleAt: sample.isoTimestamp
-              }
-            };
-          }
-          if (!getStartAnchor(connectorId, resolvedTransaction)) {
-            setStartAnchor(
+            storeBufferedSample(connectorId, normalized);
+            // Use a provisional connector-scoped timeline (transactionId undefined) so the card renders live.
+            applySample(normalized, undefined, migratedAnchor);
+            simDebug("meter.sample", {
               connectorId,
-              resolvedTransaction,
-              sameTxExisting?.startedAt ?? migratedAnchor ?? sample.isoTimestamp,
-              false,
-              "meter.sample"
-            );
-          }
-          const firstSampleForTx = txChanged || !existing;
-          if (firstSampleForTx) {
-            sampleLog = {
-              connectorId,
-              transactionId: resolvedTransaction,
-              existingTx: existing?.transactionId ?? existingTx ?? null,
-              txChanged,
-              startAnchor: getStartAnchor(connectorId, resolvedTransaction)
-            };
-          }
-          return {
-            ...current,
-            [connectorId]: {
-              connectorId,
-              transactionId: resolvedTransaction,
-              transactionKey: resolvedTransaction ?? sameTxExisting?.transactionKey,
-              cmsTransactionKey: resolvedTransaction ?? sameTxExisting?.cmsTransactionKey,
-              idTag: sameTxExisting?.idTag,
-              startedAt: sameTxExisting?.startedAt ?? sample.isoTimestamp,
-              completedAt: sameTxExisting?.completedAt,
-              updatedAt: sample.isoTimestamp,
-              state: "charging",
-              meterStartWh,
-              meterStopWh: updatedStop,
-              meterStopFinalWh: sameTxExisting?.meterStopFinalWh,
-              isFinal: false,
-              activeSession: true,
-              pricePerKwh: sameTxExisting?.pricePerKwh ?? data?.price_per_kwh ?? null,
-              maxKw: sameTxExisting?.maxKw ?? null,
-              cmsSessionId: sameTxExisting?.cmsSessionId ?? null,
-              userLimit: sameTxExisting?.userLimit ?? null,
-              limitType: sameTxExisting?.limitType ?? null,
-              finalSample: sample,
-              lastSampleAt: sample.isoTimestamp
-            }
-          };
-        });
-        if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
-          if (sampleLog) {
-            // eslint-disable-next-line no-console
-            console.debug("[simulator][meter.sample]", sampleLog);
-          }
-        }
-        frozenConnectorsRef.current.delete(connectorId);
-        appendTelemetrySample(connectorId, sample);
-          if (shouldRecordTelemetry(connectorId, sample.isoTimestamp)) {
-            const runtimeState = sessionsRef.current[connectorId]?.state;
-            const telemetryMetrics: TimelineMetric[] = [];
-            const powerLabel = `${sample.powerKw.toFixed(2)} kW`;
-            const currentLabel = `${sample.currentA.toFixed(1)} A`;
-            const energyValue = sample.energyKwh;
-            telemetryMetrics.push({ label: "Energy", value: `${formatNumber(energyValue, { digits: 3 })} kWh` });
-            telemetryMetrics.push({ label: "Power", value: powerLabel });
-            telemetryMetrics.push({ label: "Current", value: currentLabel, muted: true });
-            const runtimeStateLabel = runtimeState ? runtimeState.charAt(0).toUpperCase() + runtimeState.slice(1) : "Telemetry";
-            const txLabel = resolvedTransaction ?? runtimeSnapshot?.transactionId;
-            pushTimelineEvent({
-              dedupeKey: `meter:${connectorId}:${sample.isoTimestamp}:${resolvedTransaction ?? "no-tx"}`,
-              timestamp: sample.isoTimestamp,
-              kind: "meter",
-              title: "Telemetry update",
-              subtitle: `Connector #${connectorId}${txLabel ? ` · Tx ${txLabel}` : ""}`,
-              badge: runtimeStateLabel,
-              tone: "info",
-              icon: "gauge",
-              metrics: telemetryMetrics
+              transactionId: null,
+              valueWh: normalized.valueWh,
+              powerKw: normalized.powerKw,
+              currentA: normalized.currentA,
+              voltageV: normalized.voltageV ?? null,
+              timestamp: normalized.isoTimestamp
             });
+            return;
           }
+
+          const resolvedPowerKw = powerKw ?? 0;
+          const resolvedCurrentA = currentA ?? 0;
+          const resolvedVoltageV = voltageV ?? 0;
+          const resolvedEnergyKwh = energyKwh ?? valueWh / 1000;
+
+          const previousTimelineSample = existingTimeline?.samples.at(-1);
+          const normalized = normalizeSample(
+            {
+              connectorId,
+              timestamp: sampleTimestampMs ?? Date.now(),
+              valueWh,
+              deltaWh,
+              intervalSeconds,
+              powerKw: resolvedPowerKw,
+              currentA: resolvedCurrentA,
+              voltageV: resolvedVoltageV,
+              energyKwh: resolvedEnergyKwh,
+              transactionId: resolvedTx ?? undefined
+            },
+            previousTimelineSample
+          );
+
+          applySample(normalized, resolvedTx, migratedAnchor);
+          simDebug("meter.sample", {
+            connectorId,
+            transactionId: resolvedTx ?? null,
+            valueWh: normalized.valueWh,
+            powerKw: normalized.powerKw,
+            currentA: normalized.currentA,
+            voltageV: normalized.voltageV ?? null,
+            timestamp: normalized.isoTimestamp
+          });
           break;
         }
         case "session.started": {
@@ -1301,6 +2029,7 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
           const connectorId = Number(connectorIdRaw);
           if (!Number.isFinite(connectorId) || connectorId <= 0) break;
           delete telemetryThrottleRef.current[connectorId];
+          delete pendingSamplesRef.current[connectorId];
       const rawStartTransaction = event.transactionId as string | number | undefined;
       const transactionId = resolveEventTransactionId(rawStartTransaction);
           const rawStartedAt = typeof event.startedAt === "string" ? event.startedAt : new Date().toISOString();
@@ -1327,6 +2056,23 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
           const cachedStart = transactionId ? meterStartCacheRef.current.get(transactionId) : undefined;
           const baselineStart = normalizedMeterStart ?? cachedStart ?? 0;
           frozenConnectorsRef.current.delete(connectorId);
+          const applySample = createApplySample({
+            connectorId,
+            transactionId,
+            existingTx: sessionsRef.current[connectorId]?.transactionId,
+            shouldSwitchToNewTx: true,
+            hasTimelineSamples: Boolean(meterTimelines[connectorId]?.samples?.length),
+            noTxRestart: false,
+            migratedAnchor: startedAt,
+            runtimeSnapshot: sessionsRef.current[connectorId]
+          });
+          // Flush any pending buffer captured before session start to the new tx
+          flushBufferedSamples({
+            connectorId,
+            tx: transactionId,
+            anchorOverride: startedAt,
+            activeTx: sessionsRef.current[connectorId]?.transactionId ?? null
+          });
           setSessionsByConnector((current) => {
             const existing = current[connectorId];
             const cachedStartVal = transactionId ? meterStartCacheRef.current.get(transactionId) : undefined;
@@ -1435,6 +2181,7 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
           const connectorIdRaw = event.connectorId as number | string | undefined;
           const connectorId = Number(connectorIdRaw);
           if (!Number.isFinite(connectorId) || connectorId <= 0) break;
+          delete pendingSamplesRef.current[connectorId];
           const rawStopTransaction = event.transactionId as string | number | undefined;
           const transactionId = resolveEventTransactionId(rawStopTransaction);
           const meterStopWh = coerceNumber(event.meterStopWh);
@@ -1661,11 +2408,17 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
     ]
   );
 
-  const { status: socketStatus } = useSimulatorChannel({
+  const { status: socketStatus, lastMessageAt: lastWsMessageAt } = useSimulatorChannel({
     chargerId: data?.charger_id ?? null,
     enabled: Boolean(data?.charger_id),
     onEvent: handleSimulatorEvent
   });
+
+  useEffect(() => {
+    if (lastWsMessageAt !== undefined) {
+      setLastWsMessageAtState(lastWsMessageAt ?? null);
+    }
+  }, [lastWsMessageAt]);
 
   useEffect(() => {
     if (socketStatus !== "open") setDashboardOnline(false);
@@ -1684,30 +2437,47 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
     const staleThreshold = meterIntervalMs * 2;
     const pollPeriod = Math.min(Math.max(meterIntervalMs, 3000), 5000);
 
-    const latestSampleTs = Object.values(meterTimelines)
-      .map((timeline) => timeline?.samples?.at(-1)?.timestamp ?? null)
-      .filter((ts): ts is number => ts !== null && Number.isFinite(ts))
-      .reduce<number | null>((max, ts) => (max === null ? ts : Math.max(max, ts)), null);
+    const tick = () => {
+      const latestSampleTs = Object.values(meterTimelines)
+        .map((timeline) => timeline?.samples?.at(-1)?.timestamp ?? null)
+        .filter((ts): ts is number => ts !== null && Number.isFinite(ts))
+        .reduce<number | null>((max, ts) => (max === null ? ts : Math.max(max, ts)), null);
 
-    const hasActiveSession = Object.values(sessionsByConnector).some((runtime) =>
-      ["authorized", "charging", "finishing"].includes(runtime.state)
-    );
+      const hasActiveSession = Object.values(sessionsByConnector).some((runtime) =>
+        ["authorized", "charging", "finishing"].includes(runtime.state)
+      );
 
-    const shouldPoll =
-      hasActiveSession &&
-      (socketStatus !== "open" ||
-        latestSampleTs === null ||
-        Date.now() - latestSampleTs > staleThreshold);
+      const connectorStatuses = Object.values(sessionsByConnector).map((runtime) => runtime.state);
 
-    if (!shouldPoll) {
-      return;
-    }
-
-    const timer = window.setInterval(() => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.meterValues({ simulator: simulatorId, limit: METER_HISTORY_LIMIT })
+      const hasTxWithoutSamples = Object.entries(sessionsByConnector).some(([key, runtime]) => {
+        const connectorId = Number(key);
+        const timelineSamples = meterTimelines[connectorId]?.samples?.length ?? 0;
+        return Boolean(runtime.transactionId || runtime.transactionKey || runtime.cmsTransactionKey) && timelineSamples === 0;
       });
-    }, pollPeriod);
+
+      const shouldPoll = shouldPollTelemetry({
+        socketStatus,
+        lastWsMessageAt: lastWsMessageAtState,
+        latestSampleTs,
+        staleThreshold,
+        hasActiveSession,
+        connectorStatuses,
+        hasTxWithoutSamples
+      });
+
+      if (shouldPoll) {
+        const isFetching = queryClient.isFetching({
+          queryKey: queryKeys.meterValues({ simulator: simulatorId, limit: METER_HISTORY_LIMIT })
+        });
+        if (isFetching) return;
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.meterValues({ simulator: simulatorId, limit: METER_HISTORY_LIMIT })
+        });
+      }
+    };
+
+    tick();
+    const timer = window.setInterval(tick, pollPeriod);
 
     return () => window.clearInterval(timer);
   }, [
@@ -1716,7 +2486,8 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
     sessionsByConnector,
     socketStatus,
     simulatorId,
-    queryClient
+    queryClient,
+    lastWsMessageAtState
   ]);
 
   const activeSession = useMemo(() => {

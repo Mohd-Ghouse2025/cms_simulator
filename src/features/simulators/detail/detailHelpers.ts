@@ -169,9 +169,17 @@ export const formatDurationLabel = ({
   const parsedEnd = completedAt ? Date.parse(completedAt) : nowTs;
   const endMs = Number.isFinite(parsedEnd) ? parsedEnd : nowTs;
 
+  const normalizeIso = (value?: string | null): string | null => {
+    if (!value) return null;
+    if (typeof value !== "string") return null;
+    // Trim fractional seconds beyond milliseconds to avoid Date.parse returning NaN on microsecond payloads.
+    return value.replace(/(\\.\\d{3})\\d+/, "$1");
+  };
+
   const parseStart = (value?: string | null): number | null => {
     if (!value) return null;
-    const parsed = Date.parse(value);
+    const normalized = normalizeIso(value);
+    const parsed = normalized ? Date.parse(normalized) : NaN;
     if (!Number.isFinite(parsed)) return null;
     return parsed;
   };

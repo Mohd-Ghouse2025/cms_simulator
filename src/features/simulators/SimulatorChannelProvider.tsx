@@ -22,6 +22,7 @@ type SimulatorEvent = {
 type ChannelSnapshot = {
   status: WebSocketStatus;
   error: Event | null;
+  lastMessageAt: number | null;
 };
 
 type ChannelListener = (event: SimulatorEvent) => void;
@@ -29,6 +30,11 @@ type ChannelListener = (event: SimulatorEvent) => void;
 type SimulatorChannelContextValue = {
   subscribe: (chargerId: string, listener?: ChannelListener) => () => void;
   getSnapshot: (chargerId: string) => ChannelSnapshot | undefined;
+  /**
+   * Bumps whenever the provider clears listeners/activeIds so consumers can resubscribe.
+   * Dev-only; omitted from production logs.
+   */
+  resetEpoch: number;
 };
 
 const SimulatorChannelContext = createContext<SimulatorChannelContextValue | null>(null);
@@ -97,8 +103,19 @@ const SimulatorSocketBridge = ({
   useEffect(() => {
     if (process.env.NODE_ENV === "production" || typeof window === "undefined") return;
     const ts = new Date().toISOString();
+    const closeCode = (error as CloseEvent | undefined)?.code ?? undefined;
+    const closeReason = (error as CloseEvent | undefined)?.reason ?? undefined;
     // eslint-disable-next-line no-console
-    console.debug("[simulator][bridge][status]", { ts, chargerId, status, error: error?.type, url, shouldConnect });
+    console.debug("[simulator][bridge][status]", {
+      ts,
+      chargerId,
+      status,
+      error: error?.type,
+      closeCode,
+      closeReason,
+      url,
+      shouldConnect
+    });
   }, [chargerId, error?.type, shouldConnect, status, url]);
 
   return null;
@@ -113,8 +130,13 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
 
   const [snapshots, setSnapshots] = useState<Record<string, ChannelSnapshot>>({});
   const [activeIds, setActiveIds] = useState<string[]>([]);
+  const [resetEpoch, setResetEpoch] = useState(0);
   const listenersRef = useRef<Map<string, Set<ChannelListener>>>(new Map());
+  const activeIdsRef = useRef<string[]>([]);
   const hydratedLastRef = useRef(false);
+  const prevCanConnectRef = useRef<boolean>(canConnect);
+  const prevAuthRef = useRef<boolean>(isAuthenticated);
+  const lastTenantRef = useRef<string | null>(tenantSchema ?? null);
 
   const handleStatus = useCallback(
     (chargerId: string, status: WebSocketStatus, error: Event | null) => {
@@ -123,13 +145,30 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
         if (existing?.status === status && existing?.error === error) {
           return prev;
         }
-        return { ...prev, [chargerId]: { status, error } };
+        return {
+          ...prev,
+          [chargerId]: {
+            status,
+            error,
+            lastMessageAt: existing?.lastMessageAt ?? null
+          }
+        };
       });
     },
     []
   );
 
   const notifyListeners = useCallback((chargerId: string, payload: SimulatorEvent) => {
+    const nowTs = Date.now();
+    setSnapshots((prev) => {
+      const existing = prev[chargerId];
+      if (!existing) {
+        return { ...prev, [chargerId]: { status: "open", error: null, lastMessageAt: nowTs } };
+      }
+      if (existing.lastMessageAt === nowTs) return prev;
+      return { ...prev, [chargerId]: { ...existing, lastMessageAt: nowTs } };
+    });
+
     if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
       const { type, connectorId, transactionId } = payload as Record<string, unknown>;
       const valueWh = (payload as Record<string, unknown>).valueWh ?? (payload as Record<string, unknown>).value;
@@ -159,7 +198,21 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
       if (!chargerId) {
         return () => {};
       }
-      setActiveIds((prev) => (prev.includes(chargerId) ? prev : [...prev, chargerId]));
+      setActiveIds((prev) => {
+        const alreadyActive = prev.includes(chargerId);
+        const next = alreadyActive ? prev : [...prev, chargerId];
+        if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+          // eslint-disable-next-line no-console
+          console.debug("[simulator][provider][subscribe]", {
+            ts: new Date().toISOString(),
+            chargerId,
+            alreadyActive,
+            nextCount: next.length,
+            resetEpoch
+          });
+        }
+        return next;
+      });
       try {
         window.localStorage.setItem(LAST_CHARGER_KEY, chargerId);
       } catch {
@@ -182,7 +235,7 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
         }
       };
     },
-    []
+    [resetEpoch]
   );
 
   const getSnapshot = useCallback(
@@ -190,10 +243,20 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
     [snapshots]
   );
 
-  const resetAll = useCallback(() => {
+  const resetAll = useCallback((reason = "unspecified") => {
+    if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+      // eslint-disable-next-line no-console
+      console.debug("[simulator][provider][reset]", {
+        ts: new Date().toISOString(),
+        reason,
+        activeCount: activeIdsRef.current.length,
+        listenerCount: listenersRef.current.size
+      });
+    }
     listenersRef.current.clear();
     setActiveIds([]);
     setSnapshots({});
+    setResetEpoch((prev) => prev + 1);
     hydratedLastRef.current = false;
     try {
       window.localStorage.removeItem(LAST_CHARGER_KEY);
@@ -203,10 +266,46 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
   }, []);
 
   useEffect(() => {
-    if (!canConnect) {
-      resetAll();
+    activeIdsRef.current = activeIds;
+    if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+      // eslint-disable-next-line no-console
+      console.debug("[simulator][provider][activeIds]", {
+        ts: new Date().toISOString(),
+        activeIds
+      });
     }
-  }, [canConnect, resetAll]);
+  }, [activeIds]);
+
+  useEffect(() => {
+    const wasAuthenticated = prevAuthRef.current;
+    if (wasAuthenticated && !isAuthenticated && hydrated) {
+      resetAll("logout");
+    }
+    prevAuthRef.current = isAuthenticated;
+  }, [hydrated, isAuthenticated, resetAll]);
+
+  useEffect(() => {
+    const previousTenant = lastTenantRef.current;
+    if (previousTenant && tenantSchema && previousTenant !== tenantSchema) {
+      resetAll("tenant-changed");
+    }
+    lastTenantRef.current = tenantSchema ?? null;
+  }, [resetAll, tenantSchema]);
+
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production" || typeof window === "undefined") return;
+    const prev = prevCanConnectRef.current;
+    if (prev !== canConnect) {
+      // eslint-disable-next-line no-console
+      console.debug("[simulator][provider][canConnect]", {
+        ts: new Date().toISOString(),
+        prev,
+        next: canConnect,
+        activeCount: activeIdsRef.current.length
+      });
+    }
+    prevCanConnectRef.current = canConnect;
+  }, [canConnect]);
 
   useEffect(() => {
     if (!canConnect || hydratedLastRef.current) {
@@ -226,9 +325,10 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
   const contextValue = useMemo<SimulatorChannelContextValue>(
     () => ({
       subscribe,
-      getSnapshot
+      getSnapshot,
+      resetEpoch
     }),
-    [subscribe, getSnapshot]
+    [subscribe, getSnapshot, resetEpoch]
   );
 
   const handleUnauthorized = useCallback(async () => {
@@ -248,22 +348,9 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
           ? buildSimulatorSocketUrl(baseUrl, chargerId, accessToken, tenantSchema)
           : null;
         const shouldConnect = canConnect && Boolean(url);
-        if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
-          // eslint-disable-next-line no-console
-          console.debug("[simulator][provider][render]", {
-            chargerId,
-            baseUrl,
-            tenantSchema,
-            hasToken: Boolean(accessToken),
-            canConnect,
-            url,
-            shouldConnect,
-            authFingerprint
-          });
-        }
         return (
           <SimulatorSocketBridge
-            key={chargerId}
+            key={`${chargerId}:${authFingerprint}`}
             chargerId={chargerId}
             url={url}
             shouldConnect={shouldConnect}

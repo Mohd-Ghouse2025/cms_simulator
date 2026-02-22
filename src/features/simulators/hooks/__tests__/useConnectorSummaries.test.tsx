@@ -252,4 +252,104 @@ describe("useConnectorSummaries cost capping", () => {
     const summary = result.current.connectorsSummary[0];
     expect(summary.duration).toBe("00:00:05");
   });
+
+  it("prefers live_status over initial_status for connector status", () => {
+    const { result } = renderHook(() =>
+      useConnectorSummaries({
+        ...baseArgs,
+        data: { connectors: [{ connector_id: 1, initial_status: "FINISHING", live_status: "AVAILABLE" }] },
+        meterTimelines: {},
+        sessionsByConnector: {},
+        cmsSessionsIndex: { byId: new Map(), byFormatted: new Map(), byConnectorNumber: new Map() },
+        cmsConnectorIndex: { byId: new Map(), byNumber: new Map() },
+        defaultPricePerKwh: null
+      })
+    );
+
+    const summary = result.current.connectorsSummary[0];
+    expect(summary.connectorStatus).toBe("AVAILABLE");
+    expect(summary.statusLabel).toBe("Available");
+  });
+
+  it("falls back to metadata.cms_status when live_status is missing", () => {
+    const { result } = renderHook(() =>
+      useConnectorSummaries({
+        ...baseArgs,
+        data: {
+          connectors: [
+            { connector_id: 1, initial_status: "FINISHING", live_status: null, metadata: { cms_status: "CHARGING" } }
+          ]
+        },
+        meterTimelines: {},
+        sessionsByConnector: {},
+        cmsSessionsIndex: { byId: new Map(), byFormatted: new Map(), byConnectorNumber: new Map() },
+        cmsConnectorIndex: { byId: new Map(), byNumber: new Map() },
+        defaultPricePerKwh: null
+      })
+    );
+
+    const summary = result.current.connectorsSummary[0];
+    expect(summary.connectorStatus).toBe("CHARGING");
+    expect(summary.statusLabel).toBe("Charging");
+  });
+
+  it("falls back to initial_status when live and cms_status are missing", () => {
+    const { result } = renderHook(() =>
+      useConnectorSummaries({
+        ...baseArgs,
+        data: { connectors: [{ connector_id: 1, initial_status: "FAULTED" }] },
+        meterTimelines: {},
+        sessionsByConnector: {},
+        cmsSessionsIndex: { byId: new Map(), byFormatted: new Map(), byConnectorNumber: new Map() },
+        cmsConnectorIndex: { byId: new Map(), byNumber: new Map() },
+        defaultPricePerKwh: null
+      })
+    );
+
+    const summary = result.current.connectorsSummary[0];
+    expect(summary.connectorStatus).toBe("FAULTED");
+    expect(summary.statusLabel).toBe("Faulted");
+  });
+
+  it("uses latest live sample for meter stop and energy during charging", () => {
+    const nowTs = Date.now();
+    const samples: NormalizedSample[] = [
+      {
+        connectorId: 1,
+        timestamp: nowTs - 2000,
+        isoTimestamp: new Date(nowTs - 2000).toISOString(),
+        valueWh: 19034,
+        powerKw: 0.7,
+        currentA: 3,
+        energyKwh: 19.034
+      },
+      {
+        connectorId: 1,
+        timestamp: nowTs - 1000,
+        isoTimestamp: new Date(nowTs - 1000).toISOString(),
+        valueWh: 19035.4543,
+        powerKw: 1.1,
+        currentA: 5,
+        energyKwh: 19.0354543
+      }
+    ];
+
+    const { result } = renderHook(() =>
+      useConnectorSummaries({
+        ...baseArgs,
+        nowTs,
+        data: { connectors: [{ connector_id: 1, initial_status: "CHARGING" }] },
+        meterTimelines: { 1: { transactionId: "tx-live", transactionKey: "tx-live", samples } },
+        sessionsByConnector: {},
+        cmsSessionsIndex: { byId: new Map(), byFormatted: new Map(), byConnectorNumber: new Map() },
+        cmsConnectorIndex: { byId: new Map(), byNumber: new Map() },
+        defaultPricePerKwh: null,
+        resolveMeterStart: () => 19034
+      })
+    );
+
+    const summary = result.current.connectorsSummary[0];
+    expect(summary.meterStopKwh).toBeCloseTo(19.035, 3);
+    expect(summary.energyKwh).toBeCloseTo((19035.4543 - 19034) / 1000, 3);
+  });
 });

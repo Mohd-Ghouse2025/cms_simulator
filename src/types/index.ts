@@ -38,6 +38,9 @@ export interface SimulatedConnector {
   max_kw?: number;
   phase_count?: number;
   initial_status: ConnectorStatus;
+  live_status?: ConnectorStatus;
+  live_status_at?: string | null;
+  live_status_source?: string | null;
   metadata?: Record<string, unknown>;
 }
 

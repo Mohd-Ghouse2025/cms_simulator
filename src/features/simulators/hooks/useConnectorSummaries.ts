@@ -20,6 +20,21 @@ import {
 import styles from "../SimulatorDetailPage.module.css";
 import { formatDurationLabel } from "../detail/detailHelpers";
 
+const simDebugEnabled = () =>
+  process.env.NEXT_PUBLIC_SIM_DEBUG === "1" ||
+  process.env.NODE_ENV !== "production" ||
+  (typeof window !== "undefined" && window.localStorage.getItem("sim-debug") === "1");
+
+const simDebug = (label: string, payload?: unknown) => {
+  if (!simDebugEnabled()) return;
+  // eslint-disable-next-line no-console
+  console.info(`[simulator][${label}]`, payload ?? "");
+};
+
+// Persist a synthetic start time per connector to avoid resetting duration on every render
+// when upstream payloads don't include started_at yet.
+const syntheticStartRef = new Map<number, string>();
+
 type CmsSessionsIndex = {
   byId: Map<number, CmsChargingSession>;
   byFormatted: Map<string, CmsChargingSession>;
@@ -80,6 +95,11 @@ export const useConnectorSummaries = ({
   };
 
   const connectorsSummary: ConnectorSummary[] = useMemo<ConnectorSummary[]>(() => {
+    const normalizeIsoMillis = (value?: string | null): string | null => {
+      if (!value || typeof value !== "string") return value ?? null;
+      return value.replace(/(\.\d{3})\d+/, "$1");
+    };
+
     const connectors = data?.connectors ?? [];
     const connectorsByNumber = new Map<number, SimulatedConnector>();
     connectors.forEach((connector) => {
@@ -147,7 +167,10 @@ export const useConnectorSummaries = ({
           ? cmsSession.duration_seconds
           : null;
 
-      const connectorStatus = normalizeConnectorStatus(connector?.initial_status) ?? "AVAILABLE";
+      const liveStatus = normalizeConnectorStatus((connector as any)?.live_status);
+      const cmsStatus = normalizeConnectorStatus((connector as any)?.metadata?.cms_status);
+      const initialStatus = normalizeConnectorStatus(connector?.initial_status);
+      const connectorStatus = liveStatus ?? cmsStatus ?? initialStatus ?? "AVAILABLE";
       const stateFromConnector: SessionLifecycle = (() => {
         switch (connectorStatus) {
           case "CHARGING":
@@ -202,18 +225,42 @@ export const useConnectorSummaries = ({
       const earliestSampleWh = samples[0]?.valueWh ?? null;
       const meterStartWh = resolveMeterStart(transactionId, runtimeMeterStartWh, earliestSampleWh) ?? 0;
 
+      const latestSampleWh = toFiniteNumber(latestSample?.valueWh);
+      const liveStopWh = latestSampleWh ?? meterStartWh;
       const runtimeStopWh = runtime?.meterStopWh;
       const runtimeFinalWh = runtime?.meterStopFinalWh;
       const cmsMeterStopWh = cmsSession?.meter_stop;
-      const latestSampleWh = latestSample?.valueWh;
-      const isCompleted =
+      const sessionFinished =
         runtime?.isFinal ||
         runtime?.state === "completed" ||
         Boolean(runtime?.completedAt ?? cmsSession?.end_time);
-      const activeStop = maxFinite([runtimeStopWh, latestSampleWh, cmsMeterStopWh, meterStartWh]);
-      const finalStop = firstFinite([runtimeFinalWh, cmsMeterStopWh, runtimeStopWh, latestSampleWh, meterStartWh]);
-      const meterStopWh = (isCompleted ? finalStop : activeStop) ?? meterStartWh;
-      const meterStopFinalWh = isCompleted ? (finalStop ?? meterStopWh) : undefined;
+      // Treat a session as completed only when telemetry / runtime both indicate completion
+      // and no active session is detected on this connector.
+      const isCompleted = sessionFinished && !connectorHasSession && sessionState === "completed";
+      const activeStopInputs = [runtimeStopWh, latestSampleWh, cmsMeterStopWh, meterStartWh];
+      const activeStop = maxFinite(activeStopInputs);
+      const finalStopRaw = firstFinite([runtimeFinalWh, cmsMeterStopWh, runtimeStopWh, latestSampleWh, meterStartWh]);
+      const finalStop = typeof finalStopRaw === "number" && Number.isFinite(finalStopRaw)
+        ? Math.max(finalStopRaw, meterStartWh)
+        : undefined;
+      // Prefer the live sample for active sessions; fall back to recorded stop values.
+      const meterStopCandidate = isCompleted ? finalStop : activeStop;
+      const meterStopWh = (() => {
+        if (isCompleted && typeof finalStop === "number" && Number.isFinite(finalStop)) {
+          return Math.max(finalStop, meterStartWh);
+        }
+        return Math.max(
+          meterStartWh,
+          typeof liveStopWh === "number" && Number.isFinite(liveStopWh) ? liveStopWh : meterStartWh,
+          typeof meterStopCandidate === "number" && Number.isFinite(meterStopCandidate) ? meterStopCandidate : meterStartWh
+        );
+      })();
+      const meterStopFinalWh = isCompleted
+        ? Math.max(
+            typeof finalStop === "number" && Number.isFinite(finalStop) ? finalStop : meterStopWh,
+            meterStartWh
+          )
+        : undefined;
       const energyWh = Math.max(meterStopWh - meterStartWh, 0);
       const energyKwh = Number((energyWh / 1000).toFixed(3));
 
@@ -245,41 +292,55 @@ export const useConnectorSummaries = ({
       const rawCost =
         pricePerKwh !== null && Number.isFinite(pricePerKwh) ? energyKwh * pricePerKwh : null;
       const roundedCost = rawCost !== null ? Math.round(rawCost * 100) / 100 : null;
+      const backendCost = toFiniteNumber(
+        (cmsSession as any)?.cost_final ??
+          cmsSession?.payable_amount ??
+          cmsSession?.cost ??
+          cmsSession?.cost_raw
+      );
       const costSoFar = (() => {
-        if (roundedCost === null) return null;
-        if (limitType === "AMOUNT" && userLimit !== null && userLimit !== undefined) {
-          const capped = Math.min(roundedCost, userLimit);
+        if (limitType === "AMOUNT") {
+          const preferred = backendCost ?? roundedCost;
+          if (preferred === null) return null;
+          const capped = userLimit !== null && userLimit !== undefined ? Math.min(preferred, userLimit) : preferred;
           return Math.round(capped * 100) / 100;
         }
         return roundedCost;
       })();
-      const earliestSampleIso = samples.length ? samples[0]?.isoTimestamp ?? null : null;
+      const earliestSampleIso = samples.length ? normalizeIsoMillis(samples[0]?.isoTimestamp ?? null) : null;
       const anchorStart =
-        getStartAnchor(connectorId, transactionId) ??
-        (runtime?.transactionId ? getStartAnchor(connectorId, runtime.transactionId) : null) ??
-        getStartAnchor(connectorId, null);
-      // Pick the earliest reliable start we have. We now allow the first sample timestamp
+        normalizeIsoMillis(getStartAnchor(connectorId, transactionId)) ??
+        (runtime?.transactionId ? normalizeIsoMillis(getStartAnchor(connectorId, runtime.transactionId)) : null) ??
+        normalizeIsoMillis(getStartAnchor(connectorId, null));
+      // Pick the earliest reliable start we have. Allow the first sample timestamp
       // to seed an in-flight session so the duration timer doesn't wait for a full refresh
       // or a missing CMS start time.
-      const startedAt =
+      const startedAt = normalizeIsoMillis(
         (runtimeActive ? runtime?.startedAt : null) ??
-        cmsSession?.start_time ??
-        anchorStart ??
-        earliestSampleIso ??
-        runtime?.lastSampleAt ??
-        (connectorHasSession || ["authorized", "charging", "finishing", "pending"].includes(sessionState)
-          ? new Date(nowTs).toISOString()
-          : null);
+          cmsSession?.start_time ??
+          anchorStart ??
+          earliestSampleIso ??
+          runtime?.lastSampleAt ??
+          syntheticStartRef.get(connectorId) ??
+          null
+      );
       // As a last resort, if we still lack a start but have signs of an active session,
-      // seed with "now" so the duration ticks immediately instead of waiting for a refresh.
-      const effectiveStartedAt =
-        startedAt ??
-        (((connectorHasSession ||
+      // seed with a stable synthetic value (only once) so the duration ticks without resetting.
+      let effectiveStartedAt = startedAt;
+      if (
+        !effectiveStartedAt &&
+        (connectorHasSession ||
           sessionState !== "idle" ||
           Boolean(transactionId) ||
           samples.length > 0)
-          ? new Date(nowTs).toISOString()
-          : null) ?? null);
+      ) {
+        const synthetic = new Date(nowTs).toISOString();
+        syntheticStartRef.set(connectorId, synthetic);
+        effectiveStartedAt = synthetic;
+      }
+      if (!connectorHasSession && sessionState === "completed") {
+        syntheticStartRef.delete(connectorId);
+      }
       const completedAt =
         runtime?.completedAt ??
         (cmsSession?.end_time ??
@@ -345,6 +406,34 @@ export const useConnectorSummaries = ({
       const current = typeof latestSample?.currentA === "number" ? latestSample.currentA : null;
       const idTag = runtime?.idTag ?? undefined;
 
+      if (runtimeActive) {
+        simDebug("meter.summary", {
+          connectorId,
+          transactionId,
+          samples: samples.length,
+          meterStartWh,
+          meterStopWh,
+          energyWh,
+          energyKwh,
+          latestSampleWh,
+          latestSampleWhType: typeof latestSampleWh,
+          liveStopWh,
+          activeStopInputs,
+          lastSampleAt: latestSample?.isoTimestamp ?? null,
+          sessionState,
+          runtimeState: runtime?.state ?? null,
+          startedAt: runtime?.startedAt ?? cmsSession?.start_time ?? anchorStart ?? earliestSampleIso ?? syntheticStartRef.get(connectorId) ?? null,
+          effectiveStartedAt,
+          nowTs,
+          durationLabel: formatDurationLabel({
+            startedAt: effectiveStartedAt,
+            completedAt,
+            nowTs,
+            cmsDurationSeconds
+          })
+        });
+      }
+
       return {
         connectorId,
         connector,
@@ -367,6 +456,8 @@ export const useConnectorSummaries = ({
         isFinal: isCompleted,
         deltaKwh,
         powerKw,
+        startedAt: effectiveStartedAt ?? null,
+        completedAt: completedAt ?? null,
         lastUpdated,
         lastSampleAt: lastSampleIso,
         duration,
@@ -391,7 +482,8 @@ export const useConnectorSummaries = ({
     getSessionStatusClass,
     activeSessionConnectorId,
     activeSessionState,
-    defaultPricePerKwh
+    defaultPricePerKwh,
+    pendingLimits
   ]);
 
   const connectorSelectOptions = useMemo(

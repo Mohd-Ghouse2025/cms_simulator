@@ -129,12 +129,32 @@ export const useWebSocketChannel = ({
 
   const disposeSocket = useCallback(
     (code = 1000, reason?: string) => {
-      if (!socketRef.current) {
+      const socket = socketRef.current;
+      if (!socket) {
         return;
       }
       manualCloseRef.current = true;
+
+      // In React 18 StrictMode, effects mount/cleanup twice. Closing a socket
+      // while it is still CONNECTING triggers noisy "closed before the connection
+      // is established" errors in the console. Defer the close until after the
+      // handshake completes to keep dev tools quiet without leaking the socket.
+      if (socket.readyState === WebSocket.CONNECTING) {
+        const abort = () => {
+          try {
+            socket.close(code, reason);
+          } catch {
+            /* ignore close races */
+          }
+        };
+        socket.addEventListener("open", abort, { once: true });
+        socket.addEventListener("error", abort, { once: true });
+        socketRef.current = null;
+        return;
+      }
+
       try {
-        socketRef.current.close(code, reason);
+        socket.close(code, reason);
       } catch {
         // ignored — attempting to close already closed socket
       }
@@ -197,7 +217,15 @@ export const useWebSocketChannel = ({
       clearReconnectTimer();
       setStatus("connecting");
       setError(null);
-      const socket = new WebSocket(url, protocols);
+      // Prefer native WebSocket; browsers like Safari sometimes keep a stale
+      // TCP connection alive after a devtools reload. Force a new connection
+      // by constructing with a fresh URL object (adds no-op search param when
+      // token is present) to avoid sharing cached handshake state.
+      const freshUrl = new URL(url);
+      if (freshUrl.searchParams.has("token")) {
+        freshUrl.searchParams.set("_ts", Date.now().toString());
+      }
+      const socket = new WebSocket(freshUrl.toString(), protocols);
       socketRef.current = socket;
       lastUrlRef.current = url;
       lastComparableUrlRef.current = nextComparableUrl;
@@ -208,12 +236,29 @@ export const useWebSocketChannel = ({
           console.debug(`[ws:${connectionIdRef.current}] open ${url}`);
         }
       };
+      const triggerUnauthorizedReconnect = () => {
+        const outcome = unauthorizedHandlerRef.current?.();
+        if (outcome && typeof (outcome as Promise<unknown>).then === "function") {
+          (outcome as Promise<boolean | void>)
+            .then((shouldReconnect) => {
+              if (shouldReconnect === false) return;
+              scheduleReconnect();
+            })
+            .catch(() => scheduleReconnect());
+        } else {
+          scheduleReconnect();
+        }
+      };
       socket.onerror = (event) => {
         setStatus("error");
         setError(event);
         if (process.env.NODE_ENV !== "production") {
           console.debug(`[ws:${connectionIdRef.current}] error ${url}`, event);
         }
+        // Handshake failures (HTTP 403/4401) surface only as `error` in browsers,
+        // so proactively treat any error as potentially auth-related and trigger
+        // the unauthorized handler to refresh tokens before reconnecting.
+        triggerUnauthorizedReconnect();
       };
       socket.onclose = (event) => {
         socketRef.current = null;
@@ -222,6 +267,7 @@ export const useWebSocketChannel = ({
             `[ws:${connectionIdRef.current}] close code=${isCloseEvent(event) ? event.code : "n/a"} reason=${isCloseEvent(event) ? event.reason : ""} manual=${manualCloseRef.current} url=${url ?? lastUrlRef.current ?? ""}`
           );
         }
+        setError(event);
         setStatus("closed");
         if (manualCloseRef.current) {
           manualCloseRef.current = false;

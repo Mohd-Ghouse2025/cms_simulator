@@ -17,6 +17,7 @@ type UseSimulatorChannelOptions = {
 type UseSimulatorChannelResult = {
   status: WebSocketStatus;
   error: Event | null;
+  lastMessageAt: number | null;
 };
 
 export const useSimulatorChannel = ({
@@ -24,7 +25,7 @@ export const useSimulatorChannel = ({
   enabled = true,
   onEvent
 }: UseSimulatorChannelOptions): UseSimulatorChannelResult => {
-  const { subscribe, getSnapshot } = useSimulatorChannelContext();
+  const { subscribe, getSnapshot, resetEpoch } = useSimulatorChannelContext();
   const listenerRef = useRef<typeof onEvent>(onEvent);
 
   // Always forward to the latest handler without resubscribing the socket listener.
@@ -47,7 +48,8 @@ export const useSimulatorChannel = ({
     return () => {
       unsubscribe();
     };
-  }, [chargerId, enabled, stableListener, subscribe]);
+    // resetEpoch lets us resubscribe after provider resets listeners/activeIds
+  }, [chargerId, enabled, stableListener, subscribe, resetEpoch]);
 
   const snapshot = useMemo(
     () => (chargerId ? getSnapshot(chargerId) : undefined),
@@ -56,6 +58,7 @@ export const useSimulatorChannel = ({
 
   return {
     status: snapshot?.status ?? "idle",
-    error: snapshot?.error ?? null
+    error: snapshot?.error ?? null,
+    lastMessageAt: snapshot?.lastMessageAt ?? null
   };
 };

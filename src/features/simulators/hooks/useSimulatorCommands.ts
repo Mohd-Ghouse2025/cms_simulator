@@ -35,6 +35,16 @@ export const useSimulatorCommands = ({
   patchConnectorStatus,
   setResetFlow
 }: UseSimulatorCommandsArgs) => {
+  const simDebug = useCallback((label: string, payload?: unknown) => {
+    const enabled =
+      process.env.NEXT_PUBLIC_SIM_DEBUG === "1" ||
+      process.env.NODE_ENV !== "production" ||
+      (typeof window !== "undefined" && window.localStorage.getItem("sim-debug") === "1");
+    if (!enabled) return;
+    // eslint-disable-next-line no-console
+    console.info(`[simulator][${label}]`, payload ?? "");
+  }, []);
+
   const api = useTenantApi();
   const queryClient = useQueryClient();
   const pushToast = useNotificationStore((state) => state.pushToast);
@@ -88,6 +98,13 @@ export const useSimulatorCommands = ({
         throw new Error(`Connector ${targetConnectorId} already has an active session.`);
       }
       setCommandBusy("start");
+      simDebug("remoteStart:dispatch", {
+        simulatorId: data.id,
+        connectorId: payload.connectorId,
+        idTag: payload.idTag,
+        limitType: payload.limitType,
+        userLimit: payload.userLimit
+      });
       try {
         await api.request(endpoints.simulators.remoteStart(data.id), {
           method: "POST",
@@ -109,6 +126,7 @@ export const useSimulatorCommands = ({
           });
           patchConnectorStatus(targetConnectorId, "PREPARING");
         }
+        simDebug("remoteStart:accepted", { simulatorId: data.id, connectorId: targetConnectorId });
         pushToast({
           title: "Remote start dispatched",
           description: "RemoteStartTransaction has been queued for the charger.",
@@ -119,6 +137,7 @@ export const useSimulatorCommands = ({
         refreshSimulator();
       } catch (error) {
         const message = extractErrorMessage(error);
+        simDebug("remoteStart:error", { simulatorId: data?.id, connectorId: targetConnectorId, message, error });
         throw new Error(message);
       } finally {
         setCommandBusy(null);

@@ -36,6 +36,11 @@ export type GraphPoint = {
 const DEFAULT_VOLTAGE = 400;
 const MAX_POINTS = 720;
 
+const toFiniteNumber = (value: unknown): number | undefined => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
 const resolveTimestamp = (value?: number | string): { timestamp: number; isoTimestamp: string } => {
   if (typeof value === "number" && Number.isFinite(value)) {
     return { timestamp: value, isoTimestamp: new Date(value).toISOString() };
@@ -55,7 +60,7 @@ export const normalizeSample = (
   previous?: NormalizedSample
 ): NormalizedSample => {
   const { timestamp, isoTimestamp } = resolveTimestamp(input.timestamp);
-  const rawWh = Number.isFinite(input.valueWh) ? Number(input.valueWh) : undefined;
+  const rawWh = toFiniteNumber(input.valueWh);
   // Clamp to previous value to avoid backward energy jumps
   const valueWh =
     rawWh !== undefined && Number.isFinite(rawWh)
@@ -63,31 +68,20 @@ export const normalizeSample = (
         ? previous.valueWh
         : rawWh
       : previous?.valueWh ?? 0;
-  const rawEnergyKwh = Number.isFinite(input.energyKwh)
-    ? Number(input.energyKwh)
-    : valueWh / 1000;
-  const deltaWh = Number.isFinite(input.deltaWh)
-    ? Number(input.deltaWh)
-    : previous
-      ? valueWh - previous.valueWh
-      : undefined;
-  const intervalSeconds = Number.isFinite(input.intervalSeconds)
-    ? Number(input.intervalSeconds)
-    : previous
-      ? (timestamp - previous.timestamp) / 1000
-      : undefined;
+  const rawEnergyKwh = toFiniteNumber(input.energyKwh) ?? valueWh / 1000;
+  const deltaWh = toFiniteNumber(input.deltaWh) ?? (previous ? valueWh - previous.valueWh : undefined);
+  const intervalSeconds =
+    toFiniteNumber(input.intervalSeconds) ?? (previous ? (timestamp - previous.timestamp) / 1000 : undefined);
   const computedPower =
-    typeof input.powerKw === "number"
-      ? input.powerKw
+    toFiniteNumber(input.powerKw) !== undefined
+      ? toFiniteNumber(input.powerKw)!
       : deltaWh && intervalSeconds && intervalSeconds > 0
         ? (deltaWh / 1000) / (intervalSeconds / 3600)
         : previous?.powerKw ?? 0;
-  const voltage = Number.isFinite(input.voltageV)
-    ? Number(input.voltageV)
-    : DEFAULT_VOLTAGE;
+  const voltage = toFiniteNumber(input.voltageV) ?? DEFAULT_VOLTAGE;
   const computedCurrent =
-    typeof input.currentA === "number"
-      ? input.currentA
+    toFiniteNumber(input.currentA) !== undefined
+      ? toFiniteNumber(input.currentA)!
       : voltage > 0
         ? (computedPower * 1000) / voltage
         : previous?.currentA ?? 0;
