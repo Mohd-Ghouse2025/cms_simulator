@@ -70,13 +70,10 @@ const formatRuntimeStatus = (status?: string | null) => {
     .join(" ");
 };
 
-const cmsBadgeFor = (online: boolean | undefined): { label: string; tone: StatusTone } => {
-  if (online === true) {
-    return { label: "Online", tone: "success" };
-  }
-  if (online === false) {
-    return { label: "Offline", tone: "danger" };
-  }
+const cmsBadgeFor = (connected: boolean | undefined, online: boolean | undefined): { label: string; tone: StatusTone } => {
+  if (connected) return { label: "Connected", tone: "success" };
+  if (online === true) return { label: "Online", tone: "warning" };
+  if (online === false) return { label: "Offline", tone: "danger" };
   return { label: "Unknown", tone: "neutral" };
 };
 
@@ -97,6 +94,12 @@ const resolveCmsOnline = (simulator: SimulatedCharger): boolean | undefined => {
   const heartbeatInterval = simulator.default_heartbeat_interval ?? 60;
   const staleThreshold = Math.max(heartbeatInterval * 3 * 1000, CMS_MIN_HEARTBEAT_WINDOW_MS);
   return Date.now() - timestamp < staleThreshold;
+};
+
+const resolveCmsConnectivity = (simulator: SimulatedCharger): { connected: boolean; online: boolean | undefined } => {
+  const online = resolveCmsOnline(simulator);
+  const connected = Boolean(simulator.cms_present ?? simulator.cms_online);
+  return { connected, online };
 };
 
 const renderStatusChip = (label: string, tone: StatusTone) => (
@@ -508,15 +511,14 @@ export const SimulatorsPage = () => {
                         rowCounter += 1;
                         return (
                           <SimulatorRow
-                            key={simulator.id}
-                            simulator={simulator}
-                            rowIndex={rowCounter}
-                            instance={instancesBySimulator[simulator.id] ?? null}
-                            cmsOnline={resolveCmsOnline(simulator)}
-                            busyAction={busyActions[simulator.id] ?? null}
-                            performAction={performAction}
-                            router={router}
-                          />
+                          key={simulator.id}
+                          simulator={simulator}
+                          rowIndex={rowCounter}
+                          instance={instancesBySimulator[simulator.id] ?? null}
+                          busyAction={busyActions[simulator.id] ?? null}
+                          performAction={performAction}
+                          router={router}
+                        />
                         );
                       })}
                     </Fragment>
@@ -575,7 +577,6 @@ type SimulatorRowProps = {
   simulator: SimulatedCharger;
   rowIndex: number;
   instance: SimulatorInstance | null;
-  cmsOnline?: boolean;
   busyAction: SimulatorAction | null;
   performAction: (simulator: SimulatedCharger, action: SimulatorAction) => void;
   router: ReturnType<typeof useRouter>;
@@ -585,7 +586,6 @@ const SimulatorRow = ({
   simulator,
   rowIndex,
   instance,
-  cmsOnline,
   busyAction,
   performAction,
   router
@@ -626,8 +626,8 @@ const SimulatorRow = ({
   }
   const heartbeat = formatTimestamp(heartbeatIso);
   const connectors = simulator.connectors ?? [];
-  const cmsBadge = cmsBadgeFor(cmsOnline);
-  const cmsConnected = cmsOnline === true;
+  const { connected: cmsConnected, online: cmsOnlineResolved } = resolveCmsConnectivity(simulator);
+  const cmsBadge = cmsBadgeFor(cmsConnected, cmsOnlineResolved);
   const lifecycleBlocked = lifecycle === "OFFLINE" || lifecycle === "ERROR" || lifecycle === "CHARGING";
   const needsReconnect = !cmsConnected && !lifecycleBlocked;
   const isBusy = Boolean(busyAction);
