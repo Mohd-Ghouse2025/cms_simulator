@@ -13,6 +13,7 @@ export const endpoints = {
     detail: (id: number | string) => `${SIM_BASE}/simulated-chargers/${id}/`,
     startProcess: (id: number | string) => `${SIM_BASE}/simulated-chargers/${id}/start_process/`,
     stopProcess: (id: number | string) => `${SIM_BASE}/simulated-chargers/${id}/stop_process/`,
+    restart: (id: number | string) => `${SIM_BASE}/simulated-chargers/${id}/restart/`,
     connect: (id: number | string) => `${SIM_BASE}/simulated-chargers/${id}/connect/`,
     disconnect: (id: number | string) => `${SIM_BASE}/simulated-chargers/${id}/disconnect/`,
     remoteStart: (id: number | string) => `${SIM_BASE}/simulated-chargers/${id}/remote-start/`,

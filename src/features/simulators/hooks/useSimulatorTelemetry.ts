@@ -2614,6 +2614,8 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
     activeSession,
     activeSessionConnectorId,
     activeSessionState,
-    socketStatus
+    socketStatus,
+    lastWsMessageAt: lastWsMessageAtState,
+    meterValueIntervalMs: Math.max((data?.default_meter_value_interval ?? 5) * 1000, 3000)
   };
 };

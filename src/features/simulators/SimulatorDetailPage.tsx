@@ -15,6 +15,8 @@ import {
 } from "@/lib/simulatorLifecycle";
 import type { ConnectorTelemetrySnapshot, FaultDefinition } from "@/types";
 import { ConnectorStatus, SimulatedCharger, SimulatedSession } from "@/types";
+import { useTenantApi } from "@/hooks/useTenantApi";
+import { endpoints } from "@/lib/endpoints";
 import { useSimulatorQueries } from "./hooks/useSimulatorQueries";
 import { useSimulatorTelemetry } from "./hooks/useSimulatorTelemetry";
 import {
@@ -63,8 +65,10 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
   const router = useRouter();
   const queryClient = useQueryClient();
   const pushToast = useNotificationStore((state) => state.pushToast);
+  const api = useTenantApi();
   const simulatorId = Number(simulatorIdProp);
   const [resetFlow, setResetFlow] = useState<ResetFlowState | null>(null);
+  const [restarting, setRestarting] = useState(false);
 
   const {
     data,
@@ -104,6 +108,30 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
       queryClient.invalidateQueries({ queryKey: ["cms-charging-sessions", data.charger_id] });
     }
   }, [queryClient, simulatorId, data?.charger_id]);
+
+  const handleRestart = useCallback(async () => {
+    setRestarting(true);
+    try {
+      await api.request(endpoints.simulators.restart(simulatorId), { method: "POST" });
+      pushToast({
+        title: "Restart requested",
+        description: "Simulator runtime is restarting. Live feed will resume when connected.",
+        level: "info",
+        timeoutMs: 4000
+      });
+      refreshSimulator();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Restart failed";
+      pushToast({
+        title: "Restart failed",
+        description: message,
+        level: "error",
+        timeoutMs: 4500
+      });
+    } finally {
+      setRestarting(false);
+    }
+  }, [api, pushToast, refreshSimulator, simulatorId]);
 
   const patchSimulatorDetail = useCallback(
     (mutator: (current: DetailResponse) => DetailResponse) => {
@@ -186,6 +214,8 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     activeSessionConnectorId,
     activeSessionState,
     socketStatus,
+    lastWsMessageAt,
+    meterValueIntervalMs,
     resolveMeterStart,
     hydrateConnectorHistory,
     getStartAnchor
@@ -213,6 +243,29 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
   });
 
   const userHasSelectedRef = useRef(false);
+  const wsConnectedAtRef = useRef<number | null>(null);
+  // grace window to avoid false stale banner during initial connect
+  const staleGraceMs = 10_000;
+  const staleThresholdMs = Math.max(meterValueIntervalMs * 2, 60_000);
+
+  useEffect(() => {
+    if (socketStatus === "open") {
+      wsConnectedAtRef.current = Date.now();
+    } else if (socketStatus === "closed" || socketStatus === "error") {
+      wsConnectedAtRef.current = null;
+    }
+  }, [socketStatus]);
+
+  const now = Date.now();
+  const noMessagesYet = !lastWsMessageAt;
+  const beyondGraceWithoutMessages =
+    noMessagesYet && wsConnectedAtRef.current !== null && now - wsConnectedAtRef.current > staleGraceMs;
+  const staleByAge = lastWsMessageAt ? now - lastWsMessageAt > staleThresholdMs : false;
+  const isWsStale =
+    socketStatus === "error" ||
+    socketStatus === "closed" ||
+    staleByAge ||
+    beyondGraceWithoutMessages;
 
 
   const resolveConnectorNumber = useCallback(
@@ -695,6 +748,30 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
         onEdit={() => setShowEditModal(true)}
         editBusy={editBusy}
       />
+      {isWsStale && (
+        <div className={clsx(styles.connectionBadge, styles.statusWarning)}>
+          <div>
+            Live feed is stale — simulator may be offline or restarting. We will keep trying to reconnect.
+          </div>
+          <div style={{ display: "flex", gap: "0.5rem" }}>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => refreshSimulator()}
+              disabled={restarting}
+            >
+              Refresh data
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleRestart}
+              disabled={restarting}
+            >
+              {restarting ? "Restarting…" : "Restart simulator"}
+            </Button>
+          </div>
+        </div>
+      )}
       <section className={styles.detailGrid}>
         <OverviewCard
           isCharging={isCharging}

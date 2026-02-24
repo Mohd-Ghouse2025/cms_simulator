@@ -147,6 +147,11 @@ export interface SimulatedCharger {
   ocpp_capabilities?: string[];
   notes?: string;
   lifecycle_state: ChargerLifecycleState;
+  allow_auto_restart?: boolean;
+  restart_attempts?: number;
+  last_restart_at?: string | null;
+  last_error_at?: string | null;
+  last_error_message?: string | null;
   latest_instance_status?: SimulatorInstanceStatus | null;
   latest_instance_last_heartbeat?: string | null;
   created_at: string;
@@ -172,6 +177,8 @@ export interface SimulatorInstance {
   started_at?: string | null;
   stopped_at?: string | null;
   last_heartbeat?: string | null;
+  error_message?: string | null;
+  error_trace_tail?: string | null;
   created_at: string;
   updated_at: string;
 }
