@@ -24,6 +24,7 @@ import { endpoints } from "@/lib/endpoints";
 import { ChargerLifecycleState, SimulatedCharger, SimulatorInstance } from "@/types";
 import { AddSimulatorModal } from "./components/AddSimulatorModal";
 import styles from "./SimulatorsPage.module.css";
+import { useSimulatorChannel } from "./hooks/useSimulatorChannel";
 
 type SimulatorAction = "powerOn" | "powerOff" | "connect" | "disconnect";
 
@@ -98,7 +99,9 @@ const resolveCmsOnline = (simulator: SimulatedCharger): boolean | undefined => {
 
 const resolveCmsConnectivity = (simulator: SimulatedCharger): { connected: boolean; online: boolean | undefined } => {
   const online = resolveCmsOnline(simulator);
-  const connected = Boolean(simulator.cms_present ?? simulator.cms_online);
+  const connected = Boolean(
+    simulator.cms_present ?? (typeof simulator.cms_online === "boolean" ? simulator.cms_online : false)
+  );
   return { connected, online };
 };
 
@@ -590,6 +593,14 @@ const SimulatorRow = ({
   performAction,
   router
 }: SimulatorRowProps) => {
+  const chargerId = simulator.charger_id ?? (simulator.charger ? String(simulator.charger) : null);
+  const {
+    status: socketStatus,
+    intent: socketIntent,
+    connect: connectSocket,
+    disconnect: disconnectSocket
+  } = useSimulatorChannel({ chargerId, enabled: false });
+
   const lifecycle = normalizeLifecycleState(simulator.lifecycle_state) ?? "OFFLINE";
   const runtimeStatusRaw = instance?.status ?? simulator.latest_instance_status ?? null;
   const runtimeStatus = formatRuntimeStatus(runtimeStatusRaw);
@@ -737,6 +748,22 @@ const SimulatorRow = ({
         ? "Runtime is running without a CMS link — disconnect to clear the lock."
       : undefined
     : undefined;
+  const socketButtonLabel = (() => {
+    if (socketStatus === "open") return "Disconnect";
+    if (socketStatus === "connecting") return "Connecting…";
+    if (socketStatus === "error" || socketStatus === "closed") return "Reconnect";
+    return "Connect";
+  })();
+  const socketButtonDisabled = socketStatus === "connecting" || !chargerId;
+  const handleSocketToggle = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    if (!chargerId) return;
+    if (socketStatus === "open" || socketIntent === "connected") {
+      disconnectSocket();
+    } else {
+      connectSocket();
+    }
+  };
 
   const lifecycleMeta = getLifecycleStatusMeta(lifecycle);
   const showLastSeen = lifecycle === "OFFLINE" || lifecycle === "ERROR";
@@ -799,6 +826,18 @@ const SimulatorRow = ({
       </td>
       <td>
         <div className={styles.actionGroup}>
+          <Button
+            size="sm"
+            variant="secondary"
+            className={clsx(styles.miniAction, styles.actionButton)}
+            disabled={socketButtonDisabled}
+            title="Toggle websocket feed for this charger"
+            icon={<Plug size={16} />}
+            onClick={handleSocketToggle}
+            onKeyDown={(event) => event.stopPropagation()}
+          >
+            {socketButtonLabel}
+          </Button>
           <Button
             size="sm"
             variant="secondary"

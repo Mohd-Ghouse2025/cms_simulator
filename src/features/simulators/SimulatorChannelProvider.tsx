@@ -25,11 +25,16 @@ type ChannelSnapshot = {
   lastMessageAt: number | null;
 };
 
+type ChannelIntent = "disconnected" | "connecting" | "connected";
+
 type ChannelListener = (event: SimulatorEvent) => void;
 
 type SimulatorChannelContextValue = {
   subscribe: (chargerId: string, listener?: ChannelListener) => () => void;
   getSnapshot: (chargerId: string) => ChannelSnapshot | undefined;
+  getIntent: (chargerId: string) => ChannelIntent;
+  connect: (chargerId: string) => void;
+  disconnect: (chargerId: string) => void;
   /**
    * Bumps whenever the provider clears listeners/activeIds so consumers can resubscribe.
    * Dev-only; omitted from production logs.
@@ -38,7 +43,6 @@ type SimulatorChannelContextValue = {
 };
 
 const SimulatorChannelContext = createContext<SimulatorChannelContextValue | null>(null);
-const LAST_CHARGER_KEY = "ocpp-sim-last-charger";
 
 const parseEventPayload = (event: MessageEvent<unknown>): SimulatorEvent => {
   const payload = event.data;
@@ -74,15 +78,23 @@ const SimulatorSocketBridge = ({
   onUnauthorized,
   authFingerprint
 }: BridgeProps) => {
-  const { status, error } = useWebSocketChannel({
+  const { status, error, connect, disconnect } = useWebSocketChannel({
     url,
     shouldConnect,
-    autoReconnect: true,
+    autoReconnect: false,
     reconnectDelayMs: 1800,
     heartbeatIntervalMs: 25000,
     onMessage: (event) => notify(parseEventPayload(event)),
     onUnauthorized
   });
+
+  useEffect(() => {
+    if (shouldConnect) {
+      connect();
+    } else {
+      disconnect();
+    }
+  }, [connect, disconnect, shouldConnect]);
 
   useEffect(() => {
     onStatus(status, error);
@@ -129,11 +141,10 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
   const authFingerprint = `${tenantSchema ?? ""}:${accessToken ?? ""}`;
 
   const [snapshots, setSnapshots] = useState<Record<string, ChannelSnapshot>>({});
-  const [activeIds, setActiveIds] = useState<string[]>([]);
+  const [intentByCharger, setIntentByCharger] = useState<Record<string, ChannelIntent>>({});
   const [resetEpoch, setResetEpoch] = useState(0);
   const listenersRef = useRef<Map<string, Set<ChannelListener>>>(new Map());
   const activeIdsRef = useRef<string[]>([]);
-  const hydratedLastRef = useRef(false);
   const prevCanConnectRef = useRef<boolean>(canConnect);
   const prevAuthRef = useRef<boolean>(isAuthenticated);
   const lastTenantRef = useRef<string | null>(tenantSchema ?? null);
@@ -153,6 +164,20 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
             lastMessageAt: existing?.lastMessageAt ?? null
           }
         };
+      });
+
+      setIntentByCharger((prev) => {
+        const current = prev[chargerId] ?? "disconnected";
+        if (status === "open" && current !== "connected") {
+          return { ...prev, [chargerId]: "connected" };
+        }
+        if ((status === "closed" || status === "error") && current !== "disconnected") {
+          return { ...prev, [chargerId]: "disconnected" };
+        }
+        if (status === "connecting" && current !== "connecting") {
+          return { ...prev, [chargerId]: "connecting" };
+        }
+        return prev;
       });
     },
     []
@@ -198,26 +223,6 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
       if (!chargerId) {
         return () => {};
       }
-      setActiveIds((prev) => {
-        const alreadyActive = prev.includes(chargerId);
-        const next = alreadyActive ? prev : [...prev, chargerId];
-        if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
-          // eslint-disable-next-line no-console
-          console.debug("[simulator][provider][subscribe]", {
-            ts: new Date().toISOString(),
-            chargerId,
-            alreadyActive,
-            nextCount: next.length,
-            resetEpoch
-          });
-        }
-        return next;
-      });
-      try {
-        window.localStorage.setItem(LAST_CHARGER_KEY, chargerId);
-      } catch {
-        // best effort
-      }
       if (listener) {
         const current = listenersRef.current.get(chargerId) ?? new Set<ChannelListener>();
         current.add(listener);
@@ -243,6 +248,33 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
     [snapshots]
   );
 
+  const getIntent = useCallback(
+    (chargerId: string) => intentByCharger[chargerId] ?? "disconnected",
+    [intentByCharger]
+  );
+
+  const connect = useCallback((chargerId: string) => {
+    if (!chargerId) return;
+    setIntentByCharger((prev) => ({ ...prev, [chargerId]: "connecting" }));
+    setSnapshots((prev) => ({
+      ...prev,
+      [chargerId]: prev[chargerId] ?? { status: "idle", error: null, lastMessageAt: null }
+    }));
+  }, []);
+
+  const disconnect = useCallback((chargerId: string) => {
+    if (!chargerId) return;
+    setIntentByCharger((prev) => ({ ...prev, [chargerId]: "disconnected" }));
+    setSnapshots((prev) => {
+      const existing = prev[chargerId];
+      if (!existing) return prev;
+      return {
+        ...prev,
+        [chargerId]: { ...existing, status: "closed" }
+      };
+    });
+  }, []);
+
   const resetAll = useCallback((reason = "unspecified") => {
     if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
       // eslint-disable-next-line no-console
@@ -254,18 +286,15 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
       });
     }
     listenersRef.current.clear();
-    setActiveIds([]);
+    setIntentByCharger({});
     setSnapshots({});
     setResetEpoch((prev) => prev + 1);
-    hydratedLastRef.current = false;
-    try {
-      window.localStorage.removeItem(LAST_CHARGER_KEY);
-    } catch {
-      // ignore
-    }
   }, []);
 
   useEffect(() => {
+    const activeIds = Object.entries(intentByCharger)
+      .filter(([, intent]) => intent !== "disconnected")
+      .map(([id]) => id);
     activeIdsRef.current = activeIds;
     if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
       // eslint-disable-next-line no-console
@@ -274,7 +303,7 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
         activeIds
       });
     }
-  }, [activeIds]);
+  }, [intentByCharger]);
 
   useEffect(() => {
     const wasAuthenticated = prevAuthRef.current;
@@ -307,28 +336,16 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
     prevCanConnectRef.current = canConnect;
   }, [canConnect]);
 
-  useEffect(() => {
-    if (!canConnect || hydratedLastRef.current) {
-      return;
-    }
-    hydratedLastRef.current = true;
-    try {
-      const stored = window.localStorage.getItem(LAST_CHARGER_KEY);
-      if (stored) {
-        setActiveIds((prev) => (prev.length ? prev : [stored]));
-      }
-    } catch {
-      // ignore hydration failures
-    }
-  }, [canConnect]);
-
   const contextValue = useMemo<SimulatorChannelContextValue>(
     () => ({
       subscribe,
       getSnapshot,
+      getIntent,
+      connect,
+      disconnect,
       resetEpoch
     }),
-    [subscribe, getSnapshot, resetEpoch]
+    [subscribe, getSnapshot, getIntent, connect, disconnect, resetEpoch]
   );
 
   const handleUnauthorized = useCallback(async () => {
@@ -343,24 +360,26 @@ export const SimulatorChannelProvider = ({ children }: { children: ReactNode }) 
   return (
     <SimulatorChannelContext.Provider value={contextValue}>
       {children}
-      {activeIds.map((chargerId) => {
-        const url = canConnect
-          ? buildSimulatorSocketUrl(baseUrl, chargerId, accessToken, tenantSchema)
-          : null;
-        const shouldConnect = canConnect && Boolean(url);
-        return (
-          <SimulatorSocketBridge
-            key={`${chargerId}:${authFingerprint}`}
-            chargerId={chargerId}
-            url={url}
-            shouldConnect={shouldConnect}
-            onStatus={(status, error) => handleStatus(chargerId, status, error)}
-            notify={(payload) => notifyListeners(chargerId, payload)}
-            onUnauthorized={handleUnauthorized}
-            authFingerprint={authFingerprint}
-          />
-        );
-      })}
+      {Object.entries(intentByCharger)
+        .filter(([, intent]) => intent !== "disconnected")
+        .map(([chargerId, intent]) => {
+          const url = canConnect
+            ? buildSimulatorSocketUrl(baseUrl, chargerId, accessToken, tenantSchema)
+            : null;
+          const shouldConnect = canConnect && Boolean(url) && intent !== "disconnected";
+          return (
+            <SimulatorSocketBridge
+              key={`${chargerId}:${authFingerprint}`}
+              chargerId={chargerId}
+              url={url}
+              shouldConnect={shouldConnect}
+              onStatus={(status, error) => handleStatus(chargerId, status, error)}
+              notify={(payload) => notifyListeners(chargerId, payload)}
+              onUnauthorized={handleUnauthorized}
+              authFingerprint={authFingerprint}
+            />
+          );
+        })}
     </SimulatorChannelContext.Provider>
   );
 };

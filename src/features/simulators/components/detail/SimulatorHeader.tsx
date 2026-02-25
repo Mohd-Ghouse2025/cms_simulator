@@ -9,6 +9,9 @@ export type SimulatorHeaderProps = {
   onBack: () => void;
   onEdit: () => void;
   editBusy: boolean;
+  socketButtonLabel: string;
+  onSocketToggle: () => void;
+  socketButtonDisabled?: boolean;
 };
 
 export const SimulatorHeader = ({
@@ -18,7 +21,10 @@ export const SimulatorHeader = ({
   lifecycleLabel,
   onBack,
   onEdit,
-  editBusy
+  editBusy,
+  socketButtonLabel,
+  onSocketToggle,
+  socketButtonDisabled
 }: SimulatorHeaderProps) => (
   <header className={styles.topBar}>
     <button type="button" className={styles.backLink} onClick={onBack}>
@@ -32,6 +38,15 @@ export const SimulatorHeader = ({
       <p className={styles.headerSubtext}>{simulatorSubtitle}</p>
     </div>
     <div className={styles.headerActions}>
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
+        onClick={onSocketToggle}
+        disabled={socketButtonDisabled}
+      >
+        {socketButtonLabel}
+      </Button>
       <Button
         type="button"
         variant="secondary"

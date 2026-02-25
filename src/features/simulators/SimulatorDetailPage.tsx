@@ -214,6 +214,9 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     activeSessionConnectorId,
     activeSessionState,
     socketStatus,
+    socketIntent,
+    connectSocket,
+    disconnectSocket,
     lastWsMessageAt,
     meterValueIntervalMs,
     resolveMeterStart,
@@ -737,6 +740,22 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     : connectorsConfigured
       ? "Waiting for simulator telemetry."
       : "No connectors configured.";
+
+  const socketButtonLabel = (() => {
+    if (socketStatus === "open") return "Disconnect";
+    if (socketStatus === "connecting") return "Connecting…";
+    if (socketStatus === "error" || socketStatus === "closed") return "Reconnect";
+    return "Connect";
+  })();
+  const socketButtonDisabled = socketStatus === "connecting";
+  const handleSocketToggle = () => {
+    if (socketStatus === "open" || socketIntent === "connected") {
+      disconnectSocket();
+    } else {
+      connectSocket();
+    }
+  };
+
   return (
     <div className={styles.page}>
       <SimulatorHeader
@@ -747,11 +766,14 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
         onBack={() => router.push("/simulators")}
         onEdit={() => setShowEditModal(true)}
         editBusy={editBusy}
+        socketButtonLabel={socketButtonLabel}
+        onSocketToggle={handleSocketToggle}
+        socketButtonDisabled={socketButtonDisabled}
       />
       {isWsStale && (
         <div className={clsx(styles.connectionBadge, styles.statusWarning)}>
           <div>
-            Live feed is stale — simulator may be offline or restarting. We will keep trying to reconnect.
+            Live feed is stale — simulator may be offline or restarting. Reconnect to resume telemetry.
           </div>
           <div style={{ display: "flex", gap: "0.5rem" }}>
             <Button

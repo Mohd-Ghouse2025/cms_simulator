@@ -2408,7 +2408,13 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
     ]
   );
 
-  const { status: socketStatus, lastMessageAt: lastWsMessageAt } = useSimulatorChannel({
+  const {
+    status: socketStatus,
+    lastMessageAt: lastWsMessageAt,
+    intent: socketIntent,
+    connect: connectSocket,
+    disconnect: disconnectSocket
+  } = useSimulatorChannel({
     chargerId: data?.charger_id ?? null,
     enabled: Boolean(data?.charger_id),
     onEvent: handleSimulatorEvent
@@ -2615,6 +2621,9 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
     activeSessionConnectorId,
     activeSessionState,
     socketStatus,
+    socketIntent,
+    connectSocket,
+    disconnectSocket,
     lastWsMessageAt: lastWsMessageAtState,
     meterValueIntervalMs: Math.max((data?.default_meter_value_interval ?? 5) * 1000, 3000)
   };
