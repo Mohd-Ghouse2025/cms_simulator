@@ -3,7 +3,8 @@ import {
   chooseStartedAtForTx,
   hasTransactionChanged,
   isRuntimeStaleForRestSamples,
-  buildReconciledSession
+  buildReconciledSession,
+  shouldConnectTelemetry
 } from "../useSimulatorTelemetry";
 import { type SessionRuntime } from "../../types/detail";
 
@@ -149,5 +150,19 @@ describe("chooseStartedAtForTx", () => {
 
   it("uses candidate when existing is missing for same tx", () => {
     expect(chooseStartedAtForTx(undefined, "2024-03-01T00:00:00Z", true)).toBe("2024-03-01T00:00:00Z");
+  });
+});
+
+describe("shouldConnectTelemetry", () => {
+  it("connects when cms is connected", () => {
+    expect(shouldConnectTelemetry({ cmsConnected: true, lifecycleState: "POWERED_ON", telemetrySuppressed: false })).toBe(true);
+  });
+
+  it("connects during CONNECTING lifecycle even before cmsConnected", () => {
+    expect(shouldConnectTelemetry({ cmsConnected: false, lifecycleState: "CONNECTING", telemetrySuppressed: false })).toBe(true);
+  });
+
+  it("stays disconnected when suppressed despite cms presence", () => {
+    expect(shouldConnectTelemetry({ cmsConnected: true, lifecycleState: "CONNECTED", telemetrySuppressed: true })).toBe(false);
   });
 });

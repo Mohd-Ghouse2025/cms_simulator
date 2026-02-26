@@ -31,6 +31,7 @@ import {
 } from "../types/detail";
 import { useTenantApi } from "@/hooks/useTenantApi";
 import { useSimulatorChannel } from "./useSimulatorChannel";
+import { useSimulatorChannelContext } from "../SimulatorChannelProvider";
 import {
   NormalizedSample,
   appendSample,
@@ -117,6 +118,37 @@ import {
 
 // Normalize transaction identifiers to `string | undefined` (never null) before storing in state.
 const normalizeTxId = (tx?: string | null) => (typeof tx === "string" && tx.trim().length ? tx : undefined);
+
+export const shouldConnectTelemetry = ({
+  cmsConnected,
+  lifecycleState,
+  telemetrySuppressed
+}: {
+  cmsConnected: boolean;
+  lifecycleState: SimulatedCharger["lifecycle_state"] | "OFFLINE";
+  telemetrySuppressed?: boolean;
+}) => {
+  if (telemetrySuppressed) return false;
+  return (
+    cmsConnected ||
+    lifecycleState === "CONNECTING" ||
+    lifecycleState === "CONNECTED" ||
+    lifecycleState === "CHARGING"
+  );
+};
+
+export const shouldReleaseDisconnectHold = ({
+  cmsConnected,
+  lifecycleState
+}: {
+  cmsConnected: boolean;
+  lifecycleState: SimulatedCharger["lifecycle_state"] | "OFFLINE";
+}) => {
+  const lifecycleSafe = ["POWERED_ON", "OFFLINE", "ERROR"].includes(
+    (lifecycleState ?? "").toString()
+  );
+  return !cmsConnected || lifecycleSafe;
+};
 
 export const shouldPollTelemetry = ({
   socketStatus,
@@ -245,6 +277,8 @@ export type UseSimulatorTelemetryArgs = {
   recentSessionsResults?: SimulatedSession[];
   instancesResults?: SimulatorInstance[];
   lifecycleState: SimulatedCharger["lifecycle_state"] | "OFFLINE";
+  cmsConnected: boolean;
+  telemetrySuppressed?: boolean;
   setLiveLifecycleState: (state: SimulatedCharger["lifecycle_state"] | "OFFLINE") => void;
   pushToast: (toast: { title: string; description?: string; level: "success" | "info" | "warning" | "error"; timeoutMs?: number }) => void;
   queryClient: QueryClient;
@@ -281,6 +315,8 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
     recentSessionsResults,
     instancesResults,
     lifecycleState,
+    cmsConnected,
+    telemetrySuppressed = false,
     setLiveLifecycleState,
     pushToast,
     queryClient,
@@ -311,6 +347,8 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
   const [nowTs, setNowTs] = useState(() => Date.now());
   const [selectedConnectorId, setSelectedConnectorId] = useState<number | null>(null);
   const [lastWsMessageAtState, setLastWsMessageAtState] = useState<number | null>(null);
+  const { getDisconnectHold, setDisconnectHold } = useSimulatorChannelContext();
+  const chargerId = data?.charger_id ?? null;
 
   const timelineKeysRef = useRef<Set<string>>(new Set());
   const futureStartWarnedRef = useRef<Set<string>>(new Set());
@@ -2408,16 +2446,31 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
     ]
   );
 
+  const disconnectHold = chargerId ? getDisconnectHold(chargerId) : false;
+  const telemetrySuppressedEffective = telemetrySuppressed || disconnectHold;
+
+  const telemetryShouldConnect =
+    shouldConnectTelemetry({ cmsConnected, lifecycleState, telemetrySuppressed: telemetrySuppressedEffective });
+
+  useEffect(() => {
+    if (!disconnectHold || !chargerId) return;
+    if (shouldReleaseDisconnectHold({ cmsConnected, lifecycleState })) {
+      setDisconnectHold(chargerId, false);
+    }
+  }, [chargerId, cmsConnected, disconnectHold, lifecycleState, setDisconnectHold]);
+
   const {
     status: socketStatus,
     lastMessageAt: lastWsMessageAt,
     intent: socketIntent,
     connect: connectSocket,
-    disconnect: disconnectSocket
+    disconnect: disconnectSocket,
+    forceReconnect: forceReconnectSocket
   } = useSimulatorChannel({
     chargerId: data?.charger_id ?? null,
     enabled: Boolean(data?.charger_id),
-    onEvent: handleSimulatorEvent
+    onEvent: handleSimulatorEvent,
+    desired: telemetryShouldConnect
   });
 
   useEffect(() => {
@@ -2624,6 +2677,7 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
     socketIntent,
     connectSocket,
     disconnectSocket,
+    forceReconnectSocket,
     lastWsMessageAt: lastWsMessageAtState,
     meterValueIntervalMs: Math.max((data?.default_meter_value_interval ?? 5) * 1000, 3000)
   };

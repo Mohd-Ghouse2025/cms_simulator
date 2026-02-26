@@ -61,6 +61,52 @@ type SimulatorDetailPageProps = {
   simulatorId: number;
 };
 
+export type StaleEvalInput = {
+  intent: "disconnected" | "connecting" | "connected";
+  status: string;
+  lastMessageAt: number | null;
+  connectedAt: number | null;
+  hasActiveSession: boolean;
+  meterIntervalMs: number;
+  heartbeatIntervalMs: number;
+  statusIntervalMs: number;
+  now?: number;
+};
+
+export const evaluateWsStaleness = ({
+  intent,
+  status,
+  lastMessageAt,
+  connectedAt,
+  hasActiveSession,
+  meterIntervalMs,
+  heartbeatIntervalMs,
+  statusIntervalMs,
+  now = Date.now()
+}: StaleEvalInput): { isStale: boolean; disconnected: boolean } => {
+  if (intent === "disconnected") {
+    return { isStale: false, disconnected: true };
+  }
+
+  const graceMs = 15_000;
+  if (intent === "connecting") {
+    if (connectedAt === null || now - connectedAt <= graceMs) {
+      return { isStale: false, disconnected: false };
+    }
+  }
+
+  const threshold = hasActiveSession
+    ? Math.min(Math.max(10_000, meterIntervalMs * 5), 30_000)
+    : Math.max(Math.max(heartbeatIntervalMs, statusIntervalMs) * 2 + 10_000, 90_000);
+
+  if (!lastMessageAt) {
+    return { isStale: false, disconnected: false };
+  }
+  const age = now - lastMessageAt;
+  const isStale = status !== "open" ? true : age > threshold;
+  return { isStale, disconnected: false };
+};
+
 export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorDetailPageProps) => {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -215,8 +261,6 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     activeSessionState,
     socketStatus,
     socketIntent,
-    connectSocket,
-    disconnectSocket,
     lastWsMessageAt,
     meterValueIntervalMs,
     resolveMeterStart,
@@ -235,6 +279,7 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     recentSessionsResults: recentSessionsQuery.data?.results,
     instancesResults: instancesQuery.data?.results,
     lifecycleState,
+    cmsConnected,
     setLiveLifecycleState,
     pushToast,
     queryClient,
@@ -247,9 +292,10 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
 
   const userHasSelectedRef = useRef(false);
   const wsConnectedAtRef = useRef<number | null>(null);
-  // grace window to avoid false stale banner during initial connect
-  const staleGraceMs = 10_000;
-  const staleThresholdMs = Math.max(meterValueIntervalMs * 2, 60_000);
+  // Stale logic parameters derived from simulator config and session state
+  const heartbeatIntervalMs = Math.max((data?.default_heartbeat_interval ?? 60) * 1000, 5_000);
+  const statusIntervalMs = Math.max((data?.default_status_interval ?? 60) * 1000, 5_000);
+  const hasActiveSession = ["authorized", "charging", "finishing"].includes(activeSessionState ?? "");
 
   useEffect(() => {
     if (socketStatus === "open") {
@@ -259,16 +305,16 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     }
   }, [socketStatus]);
 
-  const now = Date.now();
-  const noMessagesYet = !lastWsMessageAt;
-  const beyondGraceWithoutMessages =
-    noMessagesYet && wsConnectedAtRef.current !== null && now - wsConnectedAtRef.current > staleGraceMs;
-  const staleByAge = lastWsMessageAt ? now - lastWsMessageAt > staleThresholdMs : false;
-  const isWsStale =
-    socketStatus === "error" ||
-    socketStatus === "closed" ||
-    staleByAge ||
-    beyondGraceWithoutMessages;
+  const { isStale: isWsStale } = evaluateWsStaleness({
+    intent: socketIntent,
+    status: socketStatus,
+    lastMessageAt: lastWsMessageAt,
+    connectedAt: wsConnectedAtRef.current,
+    hasActiveSession,
+    meterIntervalMs: meterValueIntervalMs,
+    heartbeatIntervalMs,
+    statusIntervalMs
+  });
 
 
   const resolveConnectorNumber = useCallback(
@@ -551,6 +597,45 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     setResetFlow
   });
 
+  // Short-term 1s polling after connect/disconnect to avoid “stuck” UI, max 30s.
+  useEffect(() => {
+    const actionable = commandBusy === "connect" || commandBusy === "disconnect";
+    if (!actionable) return undefined;
+    const startedAt = Date.now();
+    const tick = () => {
+      const elapsed = Date.now() - startedAt;
+      if (commandBusy === "connect") {
+        if (cmsConnected || lifecycleState === "CONNECTED" || lifecycleState === "CHARGING") {
+          return true;
+        }
+      }
+      if (commandBusy === "disconnect") {
+        const lifecycleSafe = ["POWERED_ON", "OFFLINE", "ERROR"].includes(lifecycleState);
+        if (!cmsConnected || lifecycleSafe) {
+          return true;
+        }
+      }
+      if (elapsed > 30_000) {
+        pushToast({
+          title: "Action timeout",
+          description: "Simulator state did not confirm in time.",
+          level: "warning",
+          timeoutMs: 4000
+        });
+        return true;
+      }
+      refreshSimulator();
+      return false;
+    };
+    tick();
+    const timer = window.setInterval(() => {
+      if (tick()) {
+        window.clearInterval(timer);
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [commandBusy, cmsConnected, lifecycleState, pushToast, refreshSimulator]);
+
   const renderSocketStatusLabel = useCallback((status: string): string => {
     switch (status) {
       case "open":
@@ -617,10 +702,15 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
 
   const socketStatusLabel = renderSocketStatusLabel(socketStatus);
   const socketBadgeClass = clsx(styles.connectionBadge, resolveSocketStatusClass(socketStatus));
-  const liveFeedLabel = dashboardOnline ? "Connected" : socketStatusLabel;
-  const liveFeedBadgeClass = dashboardOnline
-    ? clsx(styles.connectionBadge, styles.socketStatusLive)
-    : socketBadgeClass;
+  const liveFeedLabel = (() => {
+    if (!cmsConnected) return "CMS offline";
+    if (socketStatus === "open") return "Connected";
+    if (socketIntent === "connecting" || socketStatus === "connecting") return "Live feed connecting…";
+    return socketStatusLabel;
+  })();
+  const liveFeedBadgeClass = cmsConnected
+    ? clsx(styles.connectionBadge, socketStatus === "open" ? styles.socketStatusLive : resolveSocketStatusClass(socketStatus))
+    : clsx(styles.connectionBadge, styles.socketStatusIdle);
   const lifecycleMeta = getLifecycleStatusMeta(lifecycleState);
   const lifecycleToneClass = statusToneClassMap[lifecycleMeta.tone] ?? styles.statusNeutral;
   const lifecycleBadgeClass = clsx(styles.connectionBadge, lifecycleToneClass);
@@ -741,21 +831,6 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
       ? "Waiting for simulator telemetry."
       : "No connectors configured.";
 
-  const socketButtonLabel = (() => {
-    if (socketStatus === "open") return "Disconnect";
-    if (socketStatus === "connecting") return "Connecting…";
-    if (socketStatus === "error" || socketStatus === "closed") return "Reconnect";
-    return "Connect";
-  })();
-  const socketButtonDisabled = socketStatus === "connecting";
-  const handleSocketToggle = () => {
-    if (socketStatus === "open" || socketIntent === "connected") {
-      disconnectSocket();
-    } else {
-      connectSocket();
-    }
-  };
-
   return (
     <div className={styles.page}>
       <SimulatorHeader
@@ -766,14 +841,11 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
         onBack={() => router.push("/simulators")}
         onEdit={() => setShowEditModal(true)}
         editBusy={editBusy}
-        socketButtonLabel={socketButtonLabel}
-        onSocketToggle={handleSocketToggle}
-        socketButtonDisabled={socketButtonDisabled}
       />
-      {isWsStale && (
+      {cmsConnected && isWsStale && (
         <div className={clsx(styles.connectionBadge, styles.statusWarning)}>
           <div>
-            Live feed is stale — simulator may be offline or restarting. Reconnect to resume telemetry.
+            Live feed is stale — simulator may be offline or restarting. Reconnecting automatically…
           </div>
           <div style={{ display: "flex", gap: "0.5rem" }}>
             <Button

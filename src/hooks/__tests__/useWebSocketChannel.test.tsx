@@ -61,9 +61,14 @@ describe("useWebSocketChannel", () => {
       useWebSocketChannel({
         url: "ws://example.test/socket",
         onMessage,
+        shouldConnect: true,
         autoReconnect: false
       })
     );
+
+    act(() => {
+      result.current.connect();
+    });
 
     await waitFor(() => expect(result.current.status).toBe("open"));
 

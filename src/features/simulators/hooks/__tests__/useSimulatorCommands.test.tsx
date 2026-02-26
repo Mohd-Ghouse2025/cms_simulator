@@ -2,7 +2,6 @@ import React from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useSimulatorCommands } from "../useSimulatorCommands";
 
 let requestMock = vi.fn();
 
@@ -15,6 +14,12 @@ vi.mock("@/store/notificationStore", () => ({
   useNotificationStore: (selector?: (state: { pushToast: typeof pushToastMock }) => unknown) =>
     selector ? selector({ pushToast: pushToastMock }) : { pushToast: pushToastMock }
 }));
+
+vi.mock("../../SimulatorChannelProvider", () => ({
+  useSimulatorChannelContext: () => ({ setDisconnectHold: vi.fn() })
+}));
+
+import { useSimulatorCommands } from "../useSimulatorCommands";
 
 const wrapper = ({ children }: { children: React.ReactNode }) => {
   const client = new QueryClient();

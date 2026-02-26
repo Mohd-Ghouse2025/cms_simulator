@@ -58,27 +58,27 @@ export const OverviewCard = ({
         <h2 className={styles.cardTitle}>Overview</h2>
       </div>
     </div>
-    <div className={styles.toggleRow}>
-      <Button
-        variant="secondary"
-        className={clsx(styles.controlToggle, isCharging && styles.controlToggleStop)}
-        disabled={toggleDisabled}
-        onClick={onToggleClick}
-        title={startToggleHint}
-      >
-        {toggleLabel}
-      </Button>
-      {isCharging ? (
-        <button
-          type="button"
-          className={styles.subtleAction}
-          disabled={commandBusy === "stop"}
-          onClick={onShowStopModal}
+      <div className={styles.toggleRow}>
+        <Button
+          variant="secondary"
+          className={clsx(styles.controlToggle, isCharging && styles.controlToggleStop)}
+          disabled={toggleDisabled}
+          onClick={onToggleClick}
+          title={startToggleHint}
         >
-          Advanced stop options
-        </button>
-      ) : null}
-    </div>
+          {toggleLabel}
+        </Button>
+        {isCharging ? (
+          <button
+            type="button"
+            className={styles.subtleAction}
+            disabled={commandBusy === "stop"}
+            onClick={onShowStopModal}
+          >
+            Advanced…
+          </button>
+        ) : null}
+      </div>
     {!cmsConnected ? (
       <div className={styles.cmsWarning} role="status">
         <strong>CMS offline.</strong> Reconnect to resume heartbeats and enable session controls.

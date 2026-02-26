@@ -217,6 +217,33 @@ export const SimulatorsPage = () => {
     return map;
   }, [instanceQuery.data?.results]);
 
+  const waitForState = useCallback(
+    async (
+      simulatorId: number,
+      label: string,
+      predicate: (sim: SimulatedCharger) => boolean
+    ) => {
+      const timeoutMs = 30_000;
+      const intervalMs = 1_000;
+      const start = Date.now();
+      while (Date.now() - start < timeoutMs) {
+        const fresh = await api.request<SimulatedCharger>(endpoints.simulators.detail(simulatorId));
+        if (predicate(fresh)) {
+          return true;
+        }
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      }
+      pushToast({
+        title: `${label} is taking longer than expected`,
+        description: "We’ll keep watching for status changes. Refresh if it continues.",
+        level: "warning",
+        timeoutMs: 4500
+      });
+      return false;
+    },
+    [api, pushToast]
+  );
+
   const performAction = useCallback(async (simulator: SimulatedCharger, action: SimulatorAction) => {
     setBusyActions((current) => ({
       ...current,
@@ -233,6 +260,7 @@ export const SimulatorsPage = () => {
       return "Request failed";
     };
 
+    let shouldPoll = false;
     try {
       let response: unknown;
       switch (action) {
@@ -288,6 +316,7 @@ export const SimulatorsPage = () => {
           });
           break;
       }
+      shouldPoll = response !== null && response !== undefined;
 
       const toast = successToastByAction[action];
       pushToast({
@@ -307,6 +336,41 @@ export const SimulatorsPage = () => {
       });
       return null;
     } finally {
+      const lifecycleSatisfied = (fresh: SimulatedCharger) => {
+        const lifecycle = (fresh.lifecycle_state ?? "").toUpperCase();
+        const cmsUp = Boolean(fresh.cms_online || fresh.cms_present);
+        if (action === "powerOn") {
+          return lifecycle === "POWERED_ON" || lifecycle === "CONNECTING" || lifecycle === "CONNECTED" || lifecycle === "CHARGING";
+        }
+        if (action === "connect") {
+          return cmsUp || lifecycle === "CONNECTED" || lifecycle === "CHARGING";
+        }
+        if (action === "disconnect") {
+          return lifecycle === "POWERED_ON" && !cmsUp;
+        }
+        if (action === "powerOff") {
+          return lifecycle === "OFFLINE";
+        }
+        return true;
+      };
+      // Only short-poll when we actually issued the action successfully.
+      if (shouldPoll) {
+        try {
+          await waitForState(
+            simulator.id,
+            action === "connect"
+              ? "Connect"
+              : action === "disconnect"
+                ? "Disconnect"
+                : action === "powerOn"
+                  ? "Power on"
+                  : "Power off",
+            lifecycleSatisfied as (sim: SimulatedCharger) => boolean
+          );
+        } catch {
+          /* swallow polling errors */
+        }
+      }
       queryClient.invalidateQueries({ queryKey: ["simulators"] });
       queryClient.invalidateQueries({ queryKey: queryKeys.simulatorInstances });
       queryClient.invalidateQueries({ queryKey: queryKeys.chargers });
@@ -315,7 +379,7 @@ export const SimulatorsPage = () => {
         [simulator.id]: null
       }));
     }
-  }, [api, pushToast, queryClient]);
+  }, [api, pushToast, queryClient, waitForState]);
 
   const simulators = useMemo(() => data?.results ?? [], [data?.results]);
 
@@ -593,14 +657,6 @@ const SimulatorRow = ({
   performAction,
   router
 }: SimulatorRowProps) => {
-  const chargerId = simulator.charger_id ?? (simulator.charger ? String(simulator.charger) : null);
-  const {
-    status: socketStatus,
-    intent: socketIntent,
-    connect: connectSocket,
-    disconnect: disconnectSocket
-  } = useSimulatorChannel({ chargerId, enabled: false });
-
   const lifecycle = normalizeLifecycleState(simulator.lifecycle_state) ?? "OFFLINE";
   const runtimeStatusRaw = instance?.status ?? simulator.latest_instance_status ?? null;
   const runtimeStatus = formatRuntimeStatus(runtimeStatusRaw);
@@ -640,7 +696,6 @@ const SimulatorRow = ({
   const { connected: cmsConnected, online: cmsOnlineResolved } = resolveCmsConnectivity(simulator);
   const cmsBadge = cmsBadgeFor(cmsConnected, cmsOnlineResolved);
   const lifecycleBlocked = lifecycle === "OFFLINE" || lifecycle === "ERROR" || lifecycle === "CHARGING";
-  const needsReconnect = !cmsConnected && !lifecycleBlocked;
   const isBusy = Boolean(busyAction);
   const navigateToDetail = useCallback(() => {
     router.push(`/simulators/${simulator.id}`);
@@ -670,100 +725,96 @@ const SimulatorRow = ({
     }
   };
 
-  let powerAction: SimulatorAction | null = null;
-  let powerLabel = "Power";
-  let powerDisabled = isBusy;
-  let powerTitle: string | undefined;
-  let powerTone: "on" | "off" | "neutral" = "on";
+  const isConnecting = busyAction === "connect" || lifecycle === "CONNECTING";
+  const hasPreviousCms = Boolean(simulator.cms_last_heartbeat || simulator.cms_present || simulator.last_error_at);
 
-  switch (lifecycle) {
-    case "OFFLINE":
-      if (hasActiveInstance) {
-        powerAction = null;
-        powerLabel = "Powering…";
-        powerDisabled = true;
-        powerTone = "neutral";
-        powerTitle =
-          "Simulator runtime is already starting. Wait for it to connect or stop the process from the backend.";
-      } else {
-        powerAction = "powerOn";
-        powerLabel = busyAction === "powerOn" ? "Powering…" : "Power On";
-        powerTone = "on";
-        if (runtimeStale) {
-          powerTitle = "Previous runtime looks stale; start a fresh process.";
-        }
-      }
-      break;
-    case "ERROR":
-      powerAction = "powerOn";
-      powerLabel = busyAction === "powerOn" ? "Recovering…" : "Recover & Power";
-      powerTone = "on";
-      break;
-    case "POWERED_ON":
-    case "CONNECTING":
-    case "CONNECTED":
-      powerAction = "powerOff";
-      powerLabel = busyAction === "powerOff" ? "Powering…" : "Power Off";
-      powerTone = "off";
-      powerTitle = !hasActiveInstance
-        ? "Runtime already stopped – this will reset the simulator offline."
-        : undefined;
-      break;
-    case "CHARGING":
-      powerAction = null;
-      powerLabel = "Charging…";
-      powerTone = "neutral";
-      powerDisabled = true;
-      powerTitle = "Stop the active session before powering down.";
-      break;
-    default:
-      break;
-  }
-
-  const allowConnectLifecycle = lifecycle === "POWERED_ON" || lifecycle === "CONNECTING";
-  const showConnectButton = !lifecycleBlocked && (allowConnectLifecycle || needsReconnect);
-  const connectAction: SimulatorAction | null = showConnectButton ? "connect" : null;
-  const connectPending = busyAction === "connect" || lifecycle === "CONNECTING";
-  const connectLabel = connectPending ? "Connecting…" : needsReconnect ? "Reconnect" : "Connect";
-  const connectDisabled = isBusy || lifecycle === "CONNECTING";
-  const connectTitle = showConnectButton
-    ? lifecycle === "CONNECTING"
-      ? "CMS connection in progress."
-      : needsReconnect
-        ? "CMS heartbeat missing — reconnect to resume telemetry."
-        : "Connect the simulator to the CMS."
-    : undefined;
-  const disconnectLifecycleAllowed =
-    lifecycle === "CONNECTING" || lifecycle === "CONNECTED" || lifecycle === "POWERED_ON";
-  const showDisconnectButton =
-    !lifecycleBlocked && hasActiveInstance && disconnectLifecycleAllowed;
-  const disconnectAction: SimulatorAction | null = showDisconnectButton ? "disconnect" : null;
-  const disconnectPending = busyAction === "disconnect";
-  const disconnectLabel = disconnectPending ? "Disconnecting…" : "Disconnect";
-  const disconnectDisabled = isBusy;
-  const disconnectTitle = showDisconnectButton
-    ? lifecycle === "CONNECTING"
-      ? "Cancel the pending CMS connection."
-      : !cmsConnected && lifecycle === "POWERED_ON"
-        ? "Runtime is running without a CMS link — disconnect to clear the lock."
-      : undefined
-    : undefined;
-  const socketButtonLabel = (() => {
-    if (socketStatus === "open") return "Disconnect";
-    if (socketStatus === "connecting") return "Connecting…";
-    if (socketStatus === "error" || socketStatus === "closed") return "Reconnect";
-    return "Connect";
-  })();
-  const socketButtonDisabled = socketStatus === "connecting" || !chargerId;
-  const handleSocketToggle = (event: MouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
-    if (!chargerId) return;
-    if (socketStatus === "open" || socketIntent === "connected") {
-      disconnectSocket();
-    } else {
-      connectSocket();
+  const getPrimaryAction = () => {
+    if (lifecycle === "OFFLINE") {
+      return {
+        action: "powerOn" as SimulatorAction,
+        label: busyAction === "powerOn" ? "Powering…" : "Power On",
+        disabled: isBusy,
+        variant: "powerOn" as const,
+        title: runtimeStale ? "Previous runtime looks stale; start a fresh process." : undefined
+      };
     }
+
+    if (isConnecting) {
+      return {
+        action: null,
+        label: "Connecting…",
+        disabled: true,
+        variant: "connect" as const,
+        title: "CMS connection in progress."
+      };
+    }
+
+    if (cmsConnected) {
+      return {
+        action: "disconnect" as SimulatorAction,
+        label: busyAction === "disconnect" ? "Disconnecting…" : "Disconnect",
+        disabled: isBusy,
+        variant: "disconnect" as const,
+        title: "Disconnect from the CMS."
+      };
+    }
+
+    if (lifecycle === "POWERED_ON") {
+      const label = hasPreviousCms || hasActiveInstance ? "Reconnect" : "Connect";
+      return {
+        action: "connect" as SimulatorAction,
+        label,
+        disabled: isBusy,
+        variant: "connect" as const,
+        title: label === "Reconnect"
+          ? "CMS heartbeat missing — reconnect to resume telemetry."
+          : "Connect the simulator to the CMS."
+      };
+    }
+
+    if (lifecycle === "ERROR") {
+      return {
+        action: "powerOn" as SimulatorAction,
+        label: busyAction === "powerOn" ? "Recovering…" : "Recover & Power",
+        disabled: isBusy,
+        variant: "powerOn" as const,
+        title: "Recover the simulator runtime."
+      };
+    }
+
+    if (lifecycle === "CHARGING") {
+      return {
+        action: null,
+        label: "Charging…",
+        disabled: true,
+        variant: "neutral" as const,
+        title: "Stop the active session before other actions."
+      };
+    }
+
+    return {
+      action: "connect" as SimulatorAction,
+      label: "Connect",
+      disabled: isBusy,
+      variant: "connect" as const,
+      title: "Connect the simulator to the CMS."
+    };
   };
+
+  const primary = getPrimaryAction();
+
+  const showSecondaryPowerOff =
+    primary.action !== "powerOff" && lifecycle !== "OFFLINE" && lifecycle !== "CHARGING";
+  const secondaryPowerOff = showSecondaryPowerOff
+    ? {
+        action: "powerOff" as SimulatorAction,
+        label: busyAction === "powerOff" ? "Powering…" : "Power Off",
+        disabled: isBusy,
+        title: !hasActiveInstance
+          ? "Runtime already stopped – this will reset the simulator offline."
+          : undefined
+      }
+    : null;
 
   const lifecycleMeta = getLifecycleStatusMeta(lifecycle);
   const showLastSeen = lifecycle === "OFFLINE" || lifecycle === "ERROR";
@@ -829,73 +880,41 @@ const SimulatorRow = ({
           <Button
             size="sm"
             variant="secondary"
-            className={clsx(styles.miniAction, styles.actionButton)}
-            disabled={socketButtonDisabled}
-            title="Toggle websocket feed for this charger"
-            icon={<Plug size={16} />}
-            onClick={handleSocketToggle}
-            onKeyDown={(event) => event.stopPropagation()}
-          >
-            {socketButtonLabel}
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
             className={clsx(
               styles.miniAction,
               styles.actionButton,
-              powerTone === "on" && styles.actionPowerOn,
-              powerTone === "off" && styles.actionPowerOff
+              primary.variant === "powerOn" && styles.actionPowerOn,
+              primary.variant === "disconnect" && styles.actionPowerOff,
+              primary.variant === "connect" && styles.actionConnect
             )}
-            disabled={powerDisabled || !powerAction}
-            title={powerTitle}
-            icon={powerTone === "off" ? <Power size={16} /> : <Zap size={16} />}
+            disabled={primary.disabled || !primary.action}
+            title={primary.title}
+            icon={primary.variant === "powerOn" ? <Zap size={16} /> : <Plug size={16} />}
             onClick={(event) => {
               event.stopPropagation();
-              if (powerAction) {
-                void performAction(simulator, powerAction);
+              if (primary.action) {
+                void performAction(simulator, primary.action);
               }
             }}
             onKeyDown={(event) => event.stopPropagation()}
           >
-            {powerLabel}
+            {primary.label}
           </Button>
-          {showConnectButton ? (
-            <Button
-              size="sm"
-              variant="secondary"
-              className={clsx(styles.miniAction, styles.actionButton, styles.actionConnect)}
-              disabled={connectDisabled || !connectAction}
-              title={connectTitle}
-              icon={<Plug size={16} />}
-              onClick={(event) => {
-                event.stopPropagation();
-                if (connectAction) {
-                  void performAction(simulator, connectAction);
-                }
-              }}
-              onKeyDown={(event) => event.stopPropagation()}
-            >
-              {connectLabel}
-            </Button>
-          ) : null}
-          {showDisconnectButton ? (
+          {secondaryPowerOff ? (
             <Button
               size="sm"
               variant="secondary"
               className={clsx(styles.miniAction, styles.actionButton, styles.actionPowerOff)}
-              disabled={disconnectDisabled || !disconnectAction}
-              title={disconnectTitle}
-              icon={<Plug size={16} />}
+              disabled={secondaryPowerOff.disabled}
+              title={secondaryPowerOff.title}
+              icon={<Power size={16} />}
               onClick={(event) => {
                 event.stopPropagation();
-                if (disconnectAction && !disconnectDisabled) {
-                  void performAction(simulator, disconnectAction);
-                }
+                void performAction(simulator, secondaryPowerOff.action);
               }}
               onKeyDown={(event) => event.stopPropagation()}
             >
-              {disconnectLabel}
+              {secondaryPowerOff.label}
             </Button>
           ) : null}
         </div>

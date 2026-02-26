@@ -11,6 +11,7 @@ import { ResetFlowStage, ResetFlowState } from "../types/detail";
 import { connectorHasActiveSession, isConnectorPlugged, normalizeConnectorStatus } from "../utils/status";
 import { useNotificationStore } from "@/store/notificationStore";
 import { SimulatorUpdatePayload } from "../components/EditSimulatorModal";
+import { useSimulatorChannelContext } from "../SimulatorChannelProvider";
 
 type UseSimulatorCommandsArgs = {
   simulatorId: number;
@@ -48,6 +49,7 @@ export const useSimulatorCommands = ({
   const api = useTenantApi();
   const queryClient = useQueryClient();
   const pushToast = useNotificationStore((state) => state.pushToast);
+  const { setDisconnectHold } = useSimulatorChannelContext();
 
   const [commandBusy, setCommandBusy] = useState<
     "start" | "stop" | "reset" | "force-reset" | "connect" | "disconnect" | "plug" | "unplug" | null
@@ -61,6 +63,7 @@ export const useSimulatorCommands = ({
   const [showEditModal, setShowEditModal] = useState(false);
   const [editBusy, setEditBusy] = useState(false);
   const [faultPending, setFaultPending] = useState(false);
+  const [pendingAction, setPendingAction] = useState<"powerOn" | "powerOff" | "connect" | "disconnect" | null>(null);
 
   const extractErrorMessage = useCallback((error: unknown): string => {
     if (error instanceof ApiError) {
@@ -71,6 +74,32 @@ export const useSimulatorCommands = ({
     }
     return "Request failed";
   }, []);
+
+  const waitForState = useCallback(
+    async (label: string, predicate: (sim: SimulatedCharger | undefined) => boolean): Promise<boolean> => {
+      const timeoutMs = 30_000;
+      const intervalMs = 1_000;
+      const started = Date.now();
+      while (Date.now() - started < timeoutMs) {
+        const fresh = await queryClient.fetchQuery<SimulatedCharger | undefined>({
+          queryKey: queryKeys.simulatorDetail(simulatorId),
+          staleTime: 0
+        });
+        if (predicate(fresh)) {
+          return true;
+        }
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      }
+      pushToast({
+        title: `${label} is taking longer than expected`,
+        description: "We’ll keep trying in the background. Check connectivity or refresh.",
+        level: "warning",
+        timeoutMs: 4500
+      });
+      return false;
+    },
+    [pushToast, queryClient, simulatorId]
+  );
 
   const handleRemoteStart = useCallback(
     async (payload: { connectorId: number; idTag: string; userLimit?: number | null; limitType?: "KWH" | "AMOUNT" | null }) => {
@@ -218,7 +247,9 @@ export const useSimulatorCommands = ({
 
   const handleConnectRequest = useCallback(async () => {
     if (!data) return;
+    if (data.charger_id) setDisconnectHold(data.charger_id, false);
     setCommandBusy("connect");
+    setPendingAction("connect");
     try {
       await api.request(endpoints.simulators.connect(data.id), { method: "POST" });
       pushToast({
@@ -227,18 +258,30 @@ export const useSimulatorCommands = ({
         level: "info",
         timeoutMs: 3500
       });
+      await waitForState("Connect", (sim) => {
+        const lifecycle = (sim?.lifecycle_state ?? "").toUpperCase();
+        return Boolean(
+          sim?.cms_online ||
+            sim?.cms_present ||
+            lifecycle === "CONNECTED" ||
+            lifecycle === "CHARGING"
+        );
+      });
     } catch (error) {
       const message = extractErrorMessage(error);
       pushToast({ title: "Connect failed", description: message, level: "error" });
     } finally {
       refreshSimulator();
       setCommandBusy(null);
+      setPendingAction(null);
     }
-  }, [api, data, extractErrorMessage, pushToast, refreshSimulator]);
+  }, [api, data, extractErrorMessage, pushToast, refreshSimulator, waitForState]);
 
   const handleDisconnectRequest = useCallback(async () => {
     if (!data) return;
+    if (data.charger_id) setDisconnectHold(data.charger_id, true);
     setCommandBusy("disconnect");
+    setPendingAction("disconnect");
     try {
       await api.request(endpoints.simulators.disconnect(data.id), { method: "POST" });
       pushToast({
@@ -247,14 +290,20 @@ export const useSimulatorCommands = ({
         level: "info",
         timeoutMs: 3500
       });
+      await waitForState("Disconnect", (sim) => {
+        const lifecycle = (sim?.lifecycle_state ?? "").toUpperCase();
+        const cmsUp = Boolean(sim?.cms_online || sim?.cms_present);
+        return lifecycle === "POWERED_ON" && !cmsUp;
+      });
     } catch (error) {
       const message = extractErrorMessage(error);
       pushToast({ title: "Disconnect failed", description: message, level: "error" });
     } finally {
       refreshSimulator();
       setCommandBusy(null);
+      setPendingAction(null);
     }
-  }, [api, data, extractErrorMessage, pushToast, refreshSimulator]);
+  }, [api, data, extractErrorMessage, pushToast, refreshSimulator, waitForState]);
 
   const resolveTargetConnector = useCallback(
     () =>

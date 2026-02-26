@@ -12,6 +12,7 @@ type UseSimulatorChannelOptions = {
   chargerId?: string | null;
   enabled?: boolean;
   onEvent?: (event: SimulatorEvent) => void;
+  desired?: boolean;
 };
 
 type UseSimulatorChannelResult = {
@@ -21,14 +22,16 @@ type UseSimulatorChannelResult = {
   intent: "disconnected" | "connecting" | "connected";
   connect: () => void;
   disconnect: () => void;
+  forceReconnect: () => void;
 };
 
 export const useSimulatorChannel = ({
   chargerId,
   enabled = true,
-  onEvent
+  onEvent,
+  desired
 }: UseSimulatorChannelOptions): UseSimulatorChannelResult => {
-  const { subscribe, getSnapshot, getIntent, connect, disconnect, resetEpoch } = useSimulatorChannelContext();
+  const { subscribe, getSnapshot, getIntent, connect, disconnect, forceReconnect, setDesiredIntent, resetEpoch } = useSimulatorChannelContext();
   const listenerRef = useRef<typeof onEvent>(onEvent);
 
   // Always forward to the latest handler without resubscribing the socket listener.
@@ -54,6 +57,11 @@ export const useSimulatorChannel = ({
     // resetEpoch lets us resubscribe after provider resets listeners/activeIds
   }, [chargerId, enabled, stableListener, subscribe, resetEpoch]);
 
+  useEffect(() => {
+    if (!chargerId || desired === undefined || desired === null) return;
+    setDesiredIntent(chargerId, desired);
+  }, [chargerId, desired, setDesiredIntent]);
+
   const snapshot = useMemo(
     () => (chargerId ? getSnapshot(chargerId) : undefined),
     [chargerId, getSnapshot]
@@ -69,6 +77,9 @@ export const useSimulatorChannel = ({
     },
     disconnect: () => {
       if (chargerId) disconnect(chargerId);
+    },
+    forceReconnect: () => {
+      if (chargerId) forceReconnect(chargerId);
     }
   };
 };

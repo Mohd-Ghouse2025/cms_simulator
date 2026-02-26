@@ -29,6 +29,7 @@ const comparableUrl = (value: string | null): string | null => {
     parsed.searchParams.delete("token");
     parsed.searchParams.delete("access");
     parsed.searchParams.delete("access_token");
+    parsed.searchParams.delete("_ts");
     const query = parsed.searchParams.toString();
     parsed.search = query ? `?${query}` : "";
     return parsed.toString();
@@ -51,14 +52,13 @@ export const useWebSocketChannel = ({
   heartbeatIntervalMs,
   onUnauthorized
 }: UseWebSocketChannelOptions) => {
-  void autoReconnect;
-  void reconnectDelayMs;
-  void maxReconnectDelayMs;
+  const maxDelay = maxReconnectDelayMs ?? 15_000;
   const [status, setStatus] = useState<WebSocketStatus>("idle");
   const [lastMessage, setLastMessage] = useState<unknown>(null);
   const [error, setError] = useState<Event | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<number | null>(null);
+  const reconnectDelayRef = useRef<number>(reconnectDelayMs);
   const connectRef = useRef<() => void>(() => {});
   const manualCloseRef = useRef(false);
   const messageHandlerRef = useRef<typeof onMessage>(onMessage);
@@ -91,17 +91,14 @@ export const useWebSocketChannel = ({
     }
   }, []);
 
-  const scheduleReconnect = useCallback(() => {
-    // Manual mode: no automatic reconnect attempts
-    return;
-  }, []);
-
   const clearHeartbeat = useCallback(() => {
     if (heartbeatTimerRef.current) {
       window.clearInterval(heartbeatTimerRef.current);
       heartbeatTimerRef.current = null;
     }
   }, []);
+
+  const nextComparableUrl = useMemo(() => comparableUrl(url), [url]);
 
   const startHeartbeat = useCallback(() => {
     clearHeartbeat();
@@ -122,13 +119,38 @@ export const useWebSocketChannel = ({
     }, Math.max(heartbeatIntervalMs, 5000));
   }, [clearHeartbeat, heartbeatIntervalMs]);
 
+  const scheduleReconnect = useCallback(() => {
+    if (manualCloseRef.current || !shouldConnect || !url) return;
+    const base = Math.max(500, reconnectDelayRef.current || reconnectDelayMs);
+    const delay = Math.min(maxDelay, base);
+    const jitter = delay * (0.2 * Math.random());
+    clearReconnectTimer();
+    reconnectTimer.current = window.setTimeout(() => {
+      reconnectTimer.current = null;
+      reconnectDelayRef.current = Math.min(maxDelay, delay * 2);
+      connectRef.current();
+    }, delay + jitter);
+  }, [clearReconnectTimer, connectRef, maxDelay, reconnectDelayMs, shouldConnect, url]);
+
   const disposeSocket = useCallback(
-    (code = 1000, reason?: string) => {
+    (code = 1000, reason?: string, manual = true) => {
       const socket = socketRef.current;
       if (!socket) {
         return;
       }
-      manualCloseRef.current = true;
+      manualCloseRef.current = manual;
+      if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+        // eslint-disable-next-line no-console
+        console.debug("[ws:dispose]", {
+          ts: Date.now(),
+          url: socket.url,
+          comparableUrl: comparableUrl(socket.url),
+          code,
+          reason,
+          manual,
+          status: socket.readyState,
+        });
+      }
 
       // In React 18 StrictMode, effects mount/cleanup twice. Closing a socket
       // while it is still CONNECTING triggers noisy "closed before the connection
@@ -165,8 +187,16 @@ export const useWebSocketChannel = ({
     if (!url || !shouldConnect) {
       return;
     }
+    if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+      // eslint-disable-next-line no-console
+      console.debug("[ws:connect.call]", {
+        ts: Date.now(),
+        url,
+        comparableUrl: comparableUrl(url),
+        shouldConnect,
+      });
+    }
     const existing = socketRef.current;
-    const nextComparableUrl = comparableUrl(url);
     if (existing) {
       const isActive =
         existing.readyState === WebSocket.CONNECTING || existing.readyState === WebSocket.OPEN;
@@ -217,18 +247,18 @@ export const useWebSocketChannel = ({
       setError(null);
       // Prefer native WebSocket; browsers like Safari sometimes keep a stale
       // TCP connection alive after a devtools reload. Force a new connection
-      // by constructing with a fresh URL object (adds no-op search param when
-      // token is present) to avoid sharing cached handshake state.
+      // by constructing with a fresh URL object to avoid sharing cached handshake state.
       const freshUrl = new URL(url);
-      if (freshUrl.searchParams.has("token")) {
-        freshUrl.searchParams.set("_ts", Date.now().toString());
-      }
+      // Do not append per-connection timestamps; keep URL stable to avoid
+      // client-driven reconnect churn when comparing open sockets.
+      freshUrl.searchParams.delete("_ts");
       const socket = new WebSocket(freshUrl.toString(), protocols);
       socketRef.current = socket;
       lastUrlRef.current = url;
       lastComparableUrlRef.current = nextComparableUrl;
       socket.onopen = () => {
         setStatus("open");
+        reconnectDelayRef.current = reconnectDelayMs;
         startHeartbeat();
         if (process.env.NODE_ENV !== "production") {
           console.debug(`[ws:${connectionIdRef.current}] open ${url}`);
@@ -263,7 +293,9 @@ export const useWebSocketChannel = ({
           manualCloseRef.current = false;
           return;
         }
-        // manual mode: do not auto-reconnect
+        if (autoReconnect || shouldConnect) {
+          scheduleReconnect();
+        }
       };
       socket.onmessage = (event) => {
         if (event.data) {
@@ -281,7 +313,7 @@ export const useWebSocketChannel = ({
       console.error("WebSocket connection failed", err);
       setStatus("error");
     }
-  }, [protocols, shouldConnect, url, clearReconnectTimer, startHeartbeat]);
+  }, [protocols, shouldConnect, url, clearReconnectTimer, startHeartbeat, nextComparableUrl]);
 
   connectRef.current = connect;
 
@@ -297,22 +329,63 @@ export const useWebSocketChannel = ({
   );
 
   useEffect(() => {
-    if (!url || !shouldConnect) {
-      disposeSocket();
+    // if caller no longer wants connection, dispose.
+    if (!shouldConnect) {
+      disposeSocket(1000, "intent-off", true);
       clearReconnectTimer();
       clearHeartbeat();
       setStatus("idle");
-      return undefined;
+      return;
     }
-    return () => {
-      clearReconnectTimer();
-      clearHeartbeat();
-      disposeSocket();
-    };
-  }, [clearReconnectTimer, clearHeartbeat, disposeSocket, shouldConnect, url]);
+
+    // caller wants a connection but URL is temporarily unavailable (e.g., token refresh) — keep current socket if any.
+    if (shouldConnect && !url) {
+      return;
+    }
+
+    // must have a comparable target to reason about changes
+    if (!nextComparableUrl || !url) {
+      return;
+    }
+
+    const existing = socketRef.current;
+    const existingComparable = existing ? comparableUrl(existing.url) : null;
+
+    // if we're already connected/connecting to the same comparable endpoint, leave the socket alone
+    if (
+      existing &&
+      (existing.readyState === WebSocket.CONNECTING || existing.readyState === WebSocket.OPEN) &&
+      existingComparable === nextComparableUrl
+    ) {
+      return;
+    }
+
+    // comparable endpoint changed (e.g., charger/tenant switch) — recycle socket then connect
+    if (existing) {
+      disposeSocket(1000, "reconnect:comparable-changed", true);
+    }
+    connect();
+  }, [
+    clearHeartbeat,
+    clearReconnectTimer,
+    connect,
+    disposeSocket,
+    nextComparableUrl,
+    shouldConnect,
+    url,
+  ]);
 
   // Ensure sockets are closed on unmount regardless of shouldConnect state.
-  useEffect(() => () => disposeSocket(), [disposeSocket]);
+  useEffect(() => () => disposeSocket(1000, "unmount", true), [disposeSocket]);
+
+  const forceReconnect = useCallback(() => {
+    manualCloseRef.current = false;
+    clearReconnectTimer();
+    clearHeartbeat();
+    reconnectDelayRef.current = reconnectDelayMs;
+    disposeSocket(1000, "force-reconnect", false);
+    connectRef.current();
+  }, [clearHeartbeat, clearReconnectTimer, disposeSocket, reconnectDelayMs]);
 
   return useMemo(
     () => ({
@@ -321,8 +394,9 @@ export const useWebSocketChannel = ({
       send,
       error,
       connect,
-      disconnect: disposeSocket
+      disconnect: (code?: number, reason?: string) => disposeSocket(code, reason, true),
+      forceReconnect
     }),
-    [connect, disposeSocket, error, lastMessage, send, status]
+    [connect, disposeSocket, error, lastMessage, send, status, forceReconnect]
   );
 };
