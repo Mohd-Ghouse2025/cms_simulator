@@ -22,8 +22,14 @@ import { formatDurationLabel } from "../detail/detailHelpers";
 
 const simDebugEnabled = () =>
   process.env.NEXT_PUBLIC_SIM_DEBUG === "1" ||
-  process.env.NODE_ENV !== "production" ||
+  (typeof window !== "undefined" && (window as any).SIM_METER_DEBUG === true) ||
   (typeof window !== "undefined" && window.localStorage.getItem("sim-debug") === "1");
+
+const taxRateFromEnv = (() => {
+  const raw = process.env.NEXT_PUBLIC_TAX_RATE;
+  const parsed = raw ? Number(raw) : 0;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+})();
 
 const simDebug = (label: string, payload?: unknown) => {
   if (!simDebugEnabled()) return;
@@ -33,7 +39,15 @@ const simDebug = (label: string, payload?: unknown) => {
 
 // Persist a synthetic start time per connector to avoid resetting duration on every render
 // when upstream payloads don't include started_at yet.
-const syntheticStartRef = new Map<number, string>();
+// Synthetic anchors keyed by connector+transaction to avoid cross-session bleed.
+const syntheticStartRef = new Map<string, string>();
+const syntheticKey = (connectorId: number, tx?: string | null) => `${connectorId}:${tx ?? "no-tx"}`;
+const clearSyntheticForConnector = (connectorId: number) => {
+  const prefix = `${connectorId}:`;
+  Array.from(syntheticStartRef.keys()).forEach((key) => {
+    if (key.startsWith(prefix)) syntheticStartRef.delete(key);
+  });
+};
 
 type CmsSessionsIndex = {
   byId: Map<number, CmsChargingSession>;
@@ -203,14 +217,29 @@ export const useConnectorSummaries = ({
         latestSample?.transactionId ??
         cmsTransactionId;
 
-      const runtimeTxMatches =
-        runtime?.transactionId && transactionId ? runtime.transactionId === transactionId : false;
+      const canonicalTx = (tx?: string | null) => {
+        if (tx === null || tx === undefined) return undefined;
+        const trimmed = tx.toString().trim();
+        if (!trimmed.length) return undefined;
+        return trimmed.replace(/^0+/, "") || "0";
+      };
 
-      const sessionState: SessionLifecycle =
+      const normalizedTransactionId = canonicalTx(transactionId);
+      const normalizedRuntimeTx = canonicalTx(runtime?.transactionId);
+
+      const runtimeTxMatches =
+        normalizedRuntimeTx && normalizedTransactionId
+          ? normalizedRuntimeTx === normalizedTransactionId
+          : runtime?.transactionId && transactionId
+            ? canonicalTx(runtime.transactionId) === canonicalTx(transactionId)
+            : false;
+
+      const sessionStateRaw: SessionLifecycle =
         (runtime?.state as SessionLifecycle | undefined) ??
         (telemetryState as SessionLifecycle | undefined) ??
         ((cmsSession && !cmsSession.end_time ? "charging" : undefined) as SessionLifecycle | undefined) ??
         stateFromConnector;
+      const sessionState = (sessionStateRaw ?? "idle").toString().toLowerCase() as SessionLifecycle;
       const connectorHasSession = connectorHasActiveSession({
         sessionState,
         sessionActive: runtime?.activeSession,
@@ -223,7 +252,10 @@ export const useConnectorSummaries = ({
       const runtimeMeterStartWh =
         runtimeTxMatches || runtimeActive ? runtime?.meterStartWh : undefined;
       const earliestSampleWh = samples[0]?.valueWh ?? null;
-      const meterStartWh = resolveMeterStart(transactionId, runtimeMeterStartWh, earliestSampleWh) ?? 0;
+      const txForAnchors = normalizedTransactionId ?? transactionId ?? null;
+      const runtimeTxForAnchors = normalizedRuntimeTx ?? runtime?.transactionId ?? null;
+
+      const meterStartWh = resolveMeterStart(txForAnchors ?? undefined, runtimeMeterStartWh, earliestSampleWh) ?? 0;
 
       const latestSampleWh = toFiniteNumber(latestSample?.valueWh);
       const liveStopWh = latestSampleWh ?? meterStartWh;
@@ -232,6 +264,7 @@ export const useConnectorSummaries = ({
       const cmsMeterStopWh = cmsSession?.meter_stop;
       const sessionFinished =
         runtime?.isFinal ||
+        sessionState === "completed" ||
         runtime?.state === "completed" ||
         Boolean(runtime?.completedAt ?? cmsSession?.end_time);
       // Treat a session as completed only when telemetry / runtime both indicate completion
@@ -307,26 +340,54 @@ export const useConnectorSummaries = ({
         }
         return roundedCost;
       })();
+      // Align amount-limit progress with backend (which caps payable = base cost + tax).
+      const costGross = (() => {
+        if (limitType !== "AMOUNT") return costSoFar;
+        if (backendCost !== null && backendCost !== undefined) return costSoFar;
+        if (costSoFar === null) return null;
+        const gross = costSoFar * (1 + taxRateFromEnv);
+        return Math.round(gross * 100) / 100;
+      })();
       const earliestSampleIso = samples.length ? normalizeIsoMillis(samples[0]?.isoTimestamp ?? null) : null;
       const anchorStart =
-        normalizeIsoMillis(getStartAnchor(connectorId, transactionId)) ??
-        (runtime?.transactionId ? normalizeIsoMillis(getStartAnchor(connectorId, runtime.transactionId)) : null) ??
+        normalizeIsoMillis(getStartAnchor(connectorId, txForAnchors)) ??
+        (runtimeTxForAnchors ? normalizeIsoMillis(getStartAnchor(connectorId, runtimeTxForAnchors)) : null) ??
         normalizeIsoMillis(getStartAnchor(connectorId, null));
       // Pick the earliest reliable start we have. Allow the first sample timestamp
       // to seed an in-flight session so the duration timer doesn't wait for a full refresh
       // or a missing CMS start time.
-      const startedAt = normalizeIsoMillis(
+      let startedAt = normalizeIsoMillis(
         (runtimeActive ? runtime?.startedAt : null) ??
           cmsSession?.start_time ??
           anchorStart ??
           earliestSampleIso ??
           runtime?.lastSampleAt ??
-          syntheticStartRef.get(connectorId) ??
+          syntheticStartRef.get(syntheticKey(connectorId, txForAnchors)) ??
           null
       );
       // As a last resort, if we still lack a start but have signs of an active session,
       // seed with a stable synthetic value (only once) so the duration ticks without resetting.
       let effectiveStartedAt = startedAt;
+      // Guard against future-dated starts that freeze duration at 00:00:00.
+      const parsedStart = startedAt ? Date.parse(startedAt) : null;
+      if (parsedStart !== null && Number.isFinite(parsedStart) && parsedStart - nowTs > 5_000) {
+        const safeSample = earliestSampleIso ?? runtime?.lastSampleAt ?? null;
+        const safeFallback =
+          safeSample && Date.parse(safeSample) <= nowTs ? safeSample : new Date(nowTs).toISOString();
+        simDebug("meter.timer.start.future", {
+          connectorId,
+          transactionId: txForAnchors ?? transactionId,
+          startedAt,
+          parsedStart,
+          nowTs,
+          fallback: safeFallback
+        });
+        const normalizedFallback = normalizeIsoMillis(safeFallback);
+        effectiveStartedAt = normalizedFallback;
+        // Persist the clamped start so subsequent recomputes don't re-clamp to \"now\" every tick.
+        syntheticStartRef.set(syntheticKey(connectorId, txForAnchors), normalizedFallback ?? safeFallback);
+        startedAt = normalizedFallback;
+      }
       if (
         !effectiveStartedAt &&
         (connectorHasSession ||
@@ -335,11 +396,11 @@ export const useConnectorSummaries = ({
           samples.length > 0)
       ) {
         const synthetic = new Date(nowTs).toISOString();
-        syntheticStartRef.set(connectorId, synthetic);
+        syntheticStartRef.set(syntheticKey(connectorId, txForAnchors), synthetic);
         effectiveStartedAt = synthetic;
       }
       if (!connectorHasSession && sessionState === "completed") {
-        syntheticStartRef.delete(connectorId);
+        clearSyntheticForConnector(connectorId);
       }
       const completedAt =
         runtime?.completedAt ??
@@ -358,26 +419,22 @@ export const useConnectorSummaries = ({
         nowTs,
         cmsDurationSeconds
       });
-      if (process.env.NODE_ENV !== "production" && connectorHasSession && typeof window !== "undefined") {
-        // Dev-only duration trace for the active connector to diagnose session timing drift.
-        // eslint-disable-next-line no-console
-        console.debug("[simulator][duration]", {
-          connectorId,
-          sessionState,
-          transactionId,
-          runtimeStartedAt: runtime?.startedAt ?? null,
-          anchorStart,
-          chosenStartedAt: startedAt,
-          parsedStartMs: debugStartMs,
-          completedAt,
-          nowTs,
-          endMs: debugEndMs,
-          elapsedSeconds,
-          startDeltaMs,
-          durationLabel: duration,
-          cmsDurationSeconds
-        });
-      }
+      simDebug("meter.timer.trace", {
+        connectorId,
+        sessionState,
+        transactionId: txForAnchors ?? transactionId,
+        runtimeStartedAt: runtime?.startedAt ?? null,
+        anchorStart,
+        chosenStartedAt: startedAt,
+        parsedStartMs: debugStartMs,
+        completedAt,
+        nowTs,
+        endMs: debugEndMs,
+        elapsedSeconds,
+        startDeltaMs,
+        durationLabel: duration,
+        cmsDurationSeconds
+      });
 
       const deltaKwh =
         typeof latestSample?.deltaWh === "number"
@@ -409,7 +466,7 @@ export const useConnectorSummaries = ({
       if (runtimeActive) {
         simDebug("meter.summary", {
           connectorId,
-          transactionId,
+          transactionId: txForAnchors ?? transactionId,
           samples: samples.length,
           meterStartWh,
           meterStopWh,
@@ -422,7 +479,13 @@ export const useConnectorSummaries = ({
           lastSampleAt: latestSample?.isoTimestamp ?? null,
           sessionState,
           runtimeState: runtime?.state ?? null,
-          startedAt: runtime?.startedAt ?? cmsSession?.start_time ?? anchorStart ?? earliestSampleIso ?? syntheticStartRef.get(connectorId) ?? null,
+          startedAt:
+            runtime?.startedAt ??
+            cmsSession?.start_time ??
+            anchorStart ??
+            earliestSampleIso ??
+            syntheticStartRef.get(syntheticKey(connectorId, txForAnchors)) ??
+            null,
           effectiveStartedAt,
           nowTs,
           durationLabel: formatDurationLabel({
@@ -444,9 +507,13 @@ export const useConnectorSummaries = ({
         statusTone: connectorStatusTone(connectorStatus),
         sessionStatusLabel: getSessionStatusLabel(sessionState),
         sessionStatusClass: getSessionStatusClass(sessionState),
-        transactionId,
+        transactionId: txForAnchors ?? undefined,
         transactionKey:
-          runtime?.transactionKey ?? timeline?.transactionKey ?? (runtime?.cmsTransactionKey ?? undefined),
+          runtime?.transactionKey ??
+          timeline?.transactionKey ??
+          runtime?.cmsTransactionKey ??
+          txForAnchors ??
+          undefined,
         runtime,
         energyKwh,
         pricePerKwh,

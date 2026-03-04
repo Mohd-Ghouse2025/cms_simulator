@@ -4,7 +4,8 @@ import {
   hasTransactionChanged,
   isRuntimeStaleForRestSamples,
   buildReconciledSession,
-  shouldConnectTelemetry
+  shouldConnectTelemetry,
+  shouldPollTelemetry
 } from "../useSimulatorTelemetry";
 import { type SessionRuntime } from "../../types/detail";
 
@@ -164,5 +165,52 @@ describe("shouldConnectTelemetry", () => {
 
   it("stays disconnected when suppressed despite cms presence", () => {
     expect(shouldConnectTelemetry({ cmsConnected: true, lifecycleState: "CONNECTED", telemetrySuppressed: true })).toBe(false);
+  });
+});
+
+describe("shouldPollTelemetry", () => {
+  it("does not poll when socket is open and samples are fresh", () => {
+    const now = Date.now();
+    expect(
+      shouldPollTelemetry({
+        socketStatus: "open",
+        lastWsMessageAt: now - 1000,
+        latestSampleTs: now - 1000,
+        staleThreshold: 5000,
+        hasActiveSession: true,
+        connectorStatuses: ["charging"],
+        hasTxWithoutSamples: false
+      })
+    ).toBe(false);
+  });
+
+  it("polls when socket stale even if samples exist", () => {
+    const now = Date.now();
+    expect(
+      shouldPollTelemetry({
+        socketStatus: "open",
+        lastWsMessageAt: now - 12_000,
+        latestSampleTs: now - 2000,
+        staleThreshold: 5000,
+        hasActiveSession: true,
+        connectorStatuses: ["charging"],
+        hasTxWithoutSamples: false
+      })
+    ).toBe(true);
+  });
+
+  it("polls when active session has no samples yet", () => {
+    const now = Date.now();
+    expect(
+      shouldPollTelemetry({
+        socketStatus: "open",
+        lastWsMessageAt: now - 1000,
+        latestSampleTs: null,
+        staleThreshold: 5000,
+        hasActiveSession: true,
+        connectorStatuses: ["charging"],
+        hasTxWithoutSamples: true
+      })
+    ).toBe(true);
   });
 });

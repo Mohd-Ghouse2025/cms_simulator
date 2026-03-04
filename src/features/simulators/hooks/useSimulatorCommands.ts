@@ -135,6 +135,14 @@ export const useSimulatorCommands = ({
         userLimit: payload.userLimit
       });
       try {
+        // Always ensure backend marks connector Preparing before RemoteStart; stale summaries can be wrong.
+        await api.request(endpoints.simulators.statusUpdate(data.id), {
+          method: "POST",
+          body: { connectorId: targetConnectorId, status: "Preparing" }
+        });
+        patchConnectorStatus(targetConnectorId, "PREPARING");
+        simDebug("remoteStart:preparing", { simulatorId: data.id, connectorId: targetConnectorId });
+
         await api.request(endpoints.simulators.remoteStart(data.id), {
           method: "POST",
           body: {
@@ -144,17 +152,7 @@ export const useSimulatorCommands = ({
             ...(payload.userLimit !== undefined ? { userLimit: payload.userLimit } : {})
           }
         });
-        // Optimistically mark as Preparing only after RemoteStart succeeds.
-        const connectorStatus = normalizeConnectorStatus(
-          connectorSummary?.connectorStatus ?? connectorSummary?.connector?.initial_status ?? "AVAILABLE"
-        );
-        if (connectorStatus !== "PREPARING") {
-          await api.request(endpoints.simulators.statusUpdate(data.id), {
-            method: "POST",
-            body: { connectorId: targetConnectorId, status: "Preparing" }
-          });
-          patchConnectorStatus(targetConnectorId, "PREPARING");
-        }
+
         simDebug("remoteStart:accepted", { simulatorId: data.id, connectorId: targetConnectorId });
         pushToast({
           title: "Remote start dispatched",

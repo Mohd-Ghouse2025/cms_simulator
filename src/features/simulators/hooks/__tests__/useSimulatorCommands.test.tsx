@@ -56,8 +56,10 @@ describe("useSimulatorCommands.handleRemoteStart", () => {
     setResetFlow: vi.fn()
   });
 
-  it("does not flip to PREPARING when RemoteStart fails", async () => {
-    requestMock.mockRejectedValueOnce(new Error("fail"));
+  it("sets Preparing first and still surfaces RemoteStart failure", async () => {
+    requestMock
+      .mockResolvedValueOnce({}) // statusUpdate -> Preparing
+      .mockRejectedValueOnce(new Error("fail")); // RemoteStart
 
     const props = makeProps();
     const { result } = renderHook(() => useSimulatorCommands(props), { wrapper });
@@ -68,14 +70,14 @@ describe("useSimulatorCommands.handleRemoteStart", () => {
       ).rejects.toThrow();
     });
 
-    expect(requestMock).toHaveBeenCalledTimes(1); // only RemoteStart attempted
-    expect(props.patchConnectorStatus).not.toHaveBeenCalled();
+    expect(requestMock).toHaveBeenCalledTimes(2);
+    expect(props.patchConnectorStatus).toHaveBeenCalledWith(1, "PREPARING");
   });
 
-  it("marks connector Preparing only after RemoteStart succeeds", async () => {
+  it("prepares then RemoteStart when available", async () => {
     requestMock
-      .mockResolvedValueOnce({}) // RemoteStart
-      .mockResolvedValueOnce({}); // statusUpdate
+      .mockResolvedValueOnce({}) // statusUpdate
+      .mockResolvedValueOnce({}); // RemoteStart
 
     const props = makeProps();
     const { result } = renderHook(() => useSimulatorCommands(props), { wrapper });
@@ -85,6 +87,8 @@ describe("useSimulatorCommands.handleRemoteStart", () => {
     });
 
     expect(requestMock).toHaveBeenCalledTimes(2);
+    expect(requestMock.mock.calls[0][0]).toContain("status-update");
+    expect(requestMock.mock.calls[1][0]).toContain("remote-start");
     expect(props.patchConnectorStatus).toHaveBeenCalledWith(1, "PREPARING");
   });
 });

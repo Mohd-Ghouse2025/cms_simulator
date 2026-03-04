@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Card } from "@/components/common/Card";
 import styles from "../../SimulatorDetailPage.module.css";
 import { ConnectorSummary, TimelineTone } from "../../types/detail";
@@ -33,124 +33,119 @@ export const LiveMeterCardV2 = ({
   statusToneClassMap,
   meterIntervalSeconds
 }: LiveMeterCardProps) => {
-  const computeDuration = useCallback(
-    (connector: ConnectorSummary | null): string => {
-      if (!connector) return "—";
-      const startedAt = connector.startedAt ?? connector.lastSampleAt ?? null;
-      const completedAt = connector.completedAt ?? null;
-      if (!startedAt) return connector.duration ?? "—";
-      const startMs = Date.parse(startedAt);
-      if (!Number.isFinite(startMs)) return connector.duration ?? "—";
-      const endMs =
-        completedAt && Number.isFinite(Date.parse(completedAt))
-          ? Date.parse(completedAt)
-          : Date.now();
-      const spanSeconds = Math.max(0, Math.floor((endMs - startMs) / 1000));
-      const h = Math.floor(spanSeconds / 3600)
-        .toString()
-        .padStart(2, "0");
-      const m = Math.floor((spanSeconds % 3600) / 60)
-        .toString()
-        .padStart(2, "0");
-      const s = Math.floor(spanSeconds % 60)
-        .toString()
-        .padStart(2, "0");
-      return `${h}:${m}:${s}`;
-    },
+  const clampedStartRef = useRef<Map<string, number>>(new Map());
+  const lastTxRef = useRef<string | null>(null);
+  const debugEnabled = useMemo(
+    () =>
+      typeof window !== "undefined" &&
+      ((window as any).SIM_METER_DEBUG === true || process.env.NODE_ENV !== "production"),
     []
   );
 
-  const computeDebugTimer = useCallback((connector: ConnectorSummary | null): string => {
+  const logDuration = (payload: Record<string, unknown>) => {
+    if (!debugEnabled) return;
+    // eslint-disable-next-line no-console
+    console.debug("[meter.duration]", payload);
+  };
+
+  const resolveStartMs = (connector: ConnectorSummary | null): number | null => {
+    if (!connector) return null;
+    const key = `${connector.connectorId}:${connector.transactionId ?? "no-tx"}`;
+    const firstSampleIso = connector.samples?.[0]?.isoTimestamp ?? null;
+    const rawIso = connector.startedAt ?? connector.lastSampleAt ?? firstSampleIso ?? null;
+    if (!rawIso) return null;
+    const parsed = Date.parse(rawIso);
+    if (!Number.isFinite(parsed)) return null;
+    const now = Date.now();
+    if (parsed - now > 500) {
+      const existing = clampedStartRef.current.get(key);
+      if (existing !== undefined) return existing;
+      clampedStartRef.current.set(key, now);
+      return now;
+    }
+    clampedStartRef.current.set(key, parsed);
+    return parsed;
+  };
+
+  const computeDurationLabel = (connector: ConnectorSummary | null): string => {
     if (!connector) return "—";
-    const startedAt = connector.startedAt ?? connector.lastSampleAt ?? null;
-    if (!startedAt) return "—";
-    const startMs = Date.parse(startedAt);
-    if (!Number.isFinite(startMs)) return "—";
-
-    const completedMs = connector.completedAt ? Date.parse(connector.completedAt) : null;
-    const ticking =
-      connector.sessionState === "charging" ||
-      connector.sessionState === "authorized" ||
-      connector.sessionState === "finishing";
-    const endMs = ticking ? Date.now() : Number.isFinite(completedMs) ? (completedMs as number) : Date.now();
-
-    const diff = Math.max(0, Math.floor((endMs - startMs) / 1000));
-    const h = Math.floor(diff / 3600)
+    const startMs = resolveStartMs(connector);
+    const completedAt = connector.completedAt ?? null;
+    const isComplete = connector.sessionState === "completed";
+    if (startMs === null || !Number.isFinite(startMs)) return connector.duration ?? "—";
+    const endMs =
+      isComplete && completedAt && Number.isFinite(Date.parse(completedAt))
+        ? Date.parse(completedAt)
+        : Date.now();
+    const spanSeconds = Math.max(0, Math.floor((endMs - startMs) / 1000));
+    logDuration({
+      connectorId: connector.connectorId,
+      transactionId: connector.transactionId ?? null,
+      startedAt: connector.startedAt ?? connector.lastSampleAt ?? null,
+      completedAt,
+      startMs,
+      endMs,
+      spanSeconds,
+      sessionState: connector.sessionState
+    });
+    const h = Math.floor(spanSeconds / 3600)
       .toString()
       .padStart(2, "0");
-    const m = Math.floor((diff % 3600) / 60)
+    const m = Math.floor((spanSeconds % 3600) / 60)
       .toString()
       .padStart(2, "0");
-    const s = Math.floor(diff % 60)
+    const s = Math.floor(spanSeconds % 60)
       .toString()
       .padStart(2, "0");
     return `${h}:${m}:${s}`;
-  }, []);
+  };
 
-  const [liveDuration, setLiveDuration] = useState<string>(() => computeDuration(primaryConnector));
-  const [debugTimer, setDebugTimer] = useState<string>(() => computeDebugTimer(primaryConnector));
+  const [durationLive, setDurationLive] = useState<string>(() => computeDurationLabel(primaryConnector));
 
   useEffect(() => {
-    setLiveDuration(computeDuration(primaryConnector));
-    setDebugTimer(computeDebugTimer(primaryConnector));
-    if (!primaryConnector) return;
-    const ticking =
-      primaryConnector.sessionState === "charging" ||
-      primaryConnector.sessionState === "authorized" ||
-      primaryConnector.sessionState === "finishing";
-    if (!ticking) return;
-    let debugTimer: number | undefined;
-    if (process.env.NODE_ENV !== "production") {
-      const tickDebug = () => {
-        const label = computeDuration(primaryConnector);
-        const now = new Date();
-        // eslint-disable-next-line no-console
-        console.debug("[simulator][duration-tick]", {
-          connectorId: primaryConnector.connectorId,
-          startedAt: primaryConnector.startedAt ?? null,
-          completedAt: primaryConnector.completedAt ?? null,
-          sessionState: primaryConnector.sessionState,
-          lastSampleAt: primaryConnector.lastSampleAt ?? null,
-          nowIso: now.toISOString(),
-          label
-        });
-        if (primaryConnector.samples?.length && label === "—") {
-          // eslint-disable-next-line no-console
-          console.debug("[simulator][duration-display-miss]", {
-            connectorId: primaryConnector.connectorId,
-            startedAt: primaryConnector.startedAt ?? null,
-            lastSampleAt: primaryConnector.lastSampleAt ?? null,
-            sessionState: primaryConnector.sessionState,
-            transactionId: primaryConnector.transactionId ?? null
-          });
-        }
-      };
-      tickDebug();
-      debugTimer = window.setInterval(tickDebug, 5000);
+    const txKey = primaryConnector?.transactionId ?? "no-tx";
+    const sessionState = primaryConnector?.sessionState ?? "idle";
+    const startedAt =
+      primaryConnector?.startedAt ??
+      primaryConnector?.lastSampleAt ??
+      primaryConnector?.samples?.[0]?.isoTimestamp ??
+      null;
+    const completedAt =
+      (primaryConnector?.sessionState === "completed" ? primaryConnector?.completedAt : null) ?? null;
+    // reset clamped cache when tx changes
+    if (lastTxRef.current !== txKey) {
+      clampedStartRef.current.clear();
+      lastTxRef.current = txKey;
     }
+    const connectorSnapshot = primaryConnector;
+    const tick = () => setDurationLive(computeDurationLabel(connectorSnapshot));
+    if (debugEnabled) {
+      logDuration({
+        event: "tick-setup",
+        connectorId: primaryConnector?.connectorId ?? null,
+        transactionId: primaryConnector?.transactionId ?? null,
+        startedAt,
+        completedAt,
+        sessionState
+      });
+    }
+    tick();
+    const ticking = sessionState === "charging" || sessionState === "authorized" || sessionState === "finishing";
+    const canTick = ticking && (startedAt || resolveStartMs(primaryConnector) !== null);
+    if (!canTick) return;
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    primaryConnector?.connectorId,
+    primaryConnector?.transactionId,
+    primaryConnector?.startedAt,
+    primaryConnector?.lastSampleAt,
+    primaryConnector?.completedAt,
+    primaryConnector?.sessionState
+  ]);
 
-    const timer = window.setInterval(() => {
-      const debugLabel = computeDebugTimer(primaryConnector);
-      // Use the continuously ticking debug label for the UI duration to avoid any upstream
-      // formatting glitches that kept the main duration frozen at 00:00:00.
-      setLiveDuration(debugLabel);
-      setDebugTimer(debugLabel);
-      if (process.env.NODE_ENV !== "production") {
-        // eslint-disable-next-line no-console
-        console.debug("[simulator][duration-ui]", {
-          connectorId: primaryConnector.connectorId,
-          durationLabel: debugLabel,
-          ts: new Date().toISOString()
-        });
-      }
-    }, 1000);
-    return () => {
-      window.clearInterval(timer);
-      if (debugTimer !== undefined) {
-        window.clearInterval(debugTimer);
-      }
-    };
-  }, [primaryConnector, computeDuration]);
+  const durationLabel = useMemo(() => durationLive, [durationLive]);
 
   const latestSample = primaryConnector?.samples?.at(-1) ?? null;
   const previousSample = primaryConnector?.samples?.length && primaryConnector.samples.length > 1
@@ -187,20 +182,40 @@ export const LiveMeterCardV2 = ({
     : energyKwh !== null && pricePerKwh !== null
       ? Number((energyKwh * pricePerKwh).toFixed(2))
       : null;
+  const taxRate = (() => {
+    const raw = process.env.NEXT_PUBLIC_TAX_RATE;
+    const parsed = raw ? Number(raw) : 0;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  })();
+  const backendCostKnown =
+    (primaryConnector?.cmsSession?.cost_final ?? primaryConnector?.cmsSession?.payable_amount ?? primaryConnector?.cmsSession?.cost) !== undefined &&
+    (primaryConnector?.cmsSession?.cost_final ?? primaryConnector?.cmsSession?.payable_amount ?? primaryConnector?.cmsSession?.cost) !== null;
+  const costForLimit =
+    limitType === "AMOUNT"
+      ? backendCostKnown
+        ? costSoFar
+        : costSoFar !== null
+          ? Math.round(costSoFar * (1 + taxRate) * 100) / 100
+          : null
+      : costSoFar;
 
   const limitProgress = (() => {
     if (!limitType || userLimit === null) return null;
     if (limitType === "KWH" && energyKwh !== null) return Math.min((energyKwh / userLimit) * 100, 100);
-    if (limitType === "AMOUNT" && costSoFar !== null) return Math.min((costSoFar / userLimit) * 100, 100);
+    if (limitType === "AMOUNT" && costForLimit !== null) return Math.min((costForLimit / userLimit) * 100, 100);
     return null;
   })();
 
   const limitRemaining = (() => {
     if (!limitType || userLimit === null) return null;
     if (limitType === "KWH" && energyKwh !== null) return Math.max(userLimit - energyKwh, 0);
-    if (limitType === "AMOUNT" && costSoFar !== null) return Math.max(userLimit - costSoFar, 0);
+    if (limitType === "AMOUNT" && costForLimit !== null) return Math.max(userLimit - costForLimit, 0);
     return null;
   })();
+  const limitHintSuffix =
+    limitType === "AMOUNT" && taxRate > 0 && !backendCostKnown
+      ? ` (incl. tax est. @${(taxRate * 100).toFixed(taxRate * 100 >= 10 ? 1 : 2)}%)`
+      : "";
 
   const meterContextLabel = primaryConnector
     ? `Connector #${primaryConnector.connectorId} · ${primaryConnector.transactionId ? `Tx ${primaryConnector.transactionId}` : "No transaction"} · ${primaryConnector.statusLabel}`
@@ -241,8 +256,8 @@ export const LiveMeterCardV2 = ({
             <div className={styles.infoGrid}>
               {/* Primary KPIs */}
               <InfoItem label="Energy" value={energyKwh !== null ? `${energyKwh.toFixed(3)} kWh` : "—"} />
-              <InfoItem label="Duration" value={debugTimer} />
-              <InfoItem label="Timer (debug)" value={debugTimer} />
+              <InfoItem label="Duration" value={durationLabel} />
+              <InfoItem label="Duration (local)" value={durationLive} />
               <InfoItem
                 label="Cost so far"
                 value={costSoFar !== null ? formatCurrency(costSoFar) : "—"}
@@ -251,7 +266,7 @@ export const LiveMeterCardV2 = ({
               <InfoItem
                 label="Limit"
                 value={resolveLimitLabel(limitType, userLimit)}
-                hint={limitRemaining !== null ? renderLimitRemaining(limitType, limitRemaining) : undefined}
+                hint={limitRemaining !== null ? renderLimitRemaining(limitType, limitRemaining, limitHintSuffix) : undefined}
               />
 
               {/* Meter registers */}
@@ -322,10 +337,10 @@ const resolveLimitLabel = (limitType: ConnectorSummary["limitType"], userLimit: 
   return "None";
 };
 
-const renderLimitRemaining = (limitType: ConnectorSummary["limitType"], remaining: number | null) => {
+const renderLimitRemaining = (limitType: ConnectorSummary["limitType"], remaining: number | null, suffix = "") => {
   if (remaining === null) return undefined;
-  if (limitType === "KWH") return `Remaining ${remaining.toFixed(3)} kWh`;
-  if (limitType === "AMOUNT") return `Remaining ${formatCurrency(remaining)}`;
+  if (limitType === "KWH") return `Remaining ${remaining.toFixed(3)} kWh${suffix}`;
+  if (limitType === "AMOUNT") return `Remaining ${formatCurrency(remaining)}${suffix}`;
   return undefined;
 };
 

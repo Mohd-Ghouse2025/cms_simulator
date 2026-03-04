@@ -41,10 +41,34 @@ const LIFECYCLE_META: Record<ChargerLifecycleState, LifecycleMeta> = {
     description: "Simulator is online with the CMS and ready.",
     isActive: true
   },
+  PREPARING: {
+    label: "Preparing",
+    tone: "info",
+    description: "Preparing to start a session.",
+    isActive: true
+  },
   CHARGING: {
     label: "Charging",
     tone: "info",
     description: "Active charging session is running.",
+    isActive: true
+  },
+  SUSPENDEDEV: {
+    label: "Suspended (EV)",
+    tone: "warning",
+    description: "Vehicle paused the session.",
+    isActive: true
+  },
+  SUSPENDEDEVSE: {
+    label: "Suspended (EVSE)",
+    tone: "warning",
+    description: "Charger paused the session.",
+    isActive: true
+  },
+  FINISHING: {
+    label: "Finishing",
+    tone: "info",
+    description: "Session is winding down.",
     isActive: true
   },
   ERROR: {
@@ -81,6 +105,20 @@ export const normalizeLifecycleState = (
   if (!state) {
     return undefined;
   }
-  const key = state.toUpperCase() as ChargerLifecycleState;
-  return key in LIFECYCLE_META ? key : undefined;
+  const key = state.trim().replace(/[-\s]+/g, "_").toUpperCase();
+  const aliases: Record<string, ChargerLifecycleState> = {
+    OFFLINE: "OFFLINE",
+    POWERED_ON: "POWERED_ON",
+    CONNECTING: "CONNECTING",
+    CONNECTED: "CONNECTED",
+    PREPARING: "PREPARING",
+    CHARGING: "CHARGING",
+    SUSPENDEDEV: "SUSPENDEDEV",
+    SUSPENDED_EV: "SUSPENDEDEV",
+    SUSPENDEDEVSE: "SUSPENDEDEVSE",
+    SUSPENDED_EVSE: "SUSPENDEDEVSE",
+    FINISHING: "FINISHING",
+    ERROR: "ERROR"
+  };
+  return aliases[key];
 };

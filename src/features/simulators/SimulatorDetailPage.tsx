@@ -463,14 +463,17 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     connectorsSummary.find((summary) => summary.samples.length > 0) ??
     connectorsSummary[0] ??
     null;
+  const lastSampleTs = primaryConnector?.lastSampleAt ? Date.parse(primaryConnector.lastSampleAt) : null;
+  const startTs = primaryConnector?.startedAt ? Date.parse(primaryConnector.startedAt) : null;
+  const staleThreshold = Math.max(meterValueIntervalMs * 2, 15_000);
+  const graceMs = 10_000;
+  const sampleStale = lastSampleTs !== null ? nowTs - lastSampleTs > staleThreshold : false;
+  const withinGrace = startTs !== null ? nowTs - startTs < graceMs : false;
   const graphIsFrozen =
     primaryConnector?.sessionState === "completed" ||
     primaryConnector?.sessionState === "finishing" ||
-    (primaryConnector?.lastSampleAt ? nowTs - Date.parse(primaryConnector.lastSampleAt) > 15_000 : false);
-  const lastSampleIsStale =
-    primaryConnector?.lastSampleAt && !graphIsFrozen
-      ? nowTs - Date.parse(primaryConnector.lastSampleAt) > 15_000
-      : false;
+    (sampleStale && !withinGrace);
+  const lastSampleIsStale = Boolean(!graphIsFrozen && sampleStale && !withinGrace);
 
   const connectorSummaryMap = useMemo(
     () => Object.fromEntries(connectorsSummary.map((summary) => [summary.connectorId, summary])),

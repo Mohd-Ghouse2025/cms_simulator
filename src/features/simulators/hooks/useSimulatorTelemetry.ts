@@ -58,7 +58,7 @@ import {
 
 const simDebugEnabled = () =>
   process.env.NEXT_PUBLIC_SIM_DEBUG === "1" ||
-  process.env.NODE_ENV !== "production" ||
+  (typeof window !== "undefined" && (window as any).SIM_METER_DEBUG === true) ||
   (typeof window !== "undefined" && window.localStorage.getItem("sim-debug") === "1");
 
 const simDebug = (label: string, payload?: unknown) => {
@@ -87,9 +87,18 @@ export const chooseStartedAtForTx = (existing: string | undefined, candidate: st
   return earliest ?? undefined;
 };
 
+const canonicalTx = (tx?: string | null) => {
+  if (tx === null || tx === undefined) return undefined;
+  const trimmed = tx.toString().trim();
+  if (!trimmed.length) return undefined;
+  return trimmed.replace(/^0+/, "") || "0";
+};
+
 export const hasTransactionChanged = (existingTx?: string | null, incomingTx?: string | null): boolean => {
-  if (!existingTx && !incomingTx) return false;
-  return existingTx !== incomingTx;
+  const a = canonicalTx(existingTx);
+  const b = canonicalTx(incomingTx);
+  if (!a && !b) return false;
+  return a !== b;
 };
 
 export const migrateNoTxAnchorValue = (
@@ -116,8 +125,14 @@ import {
   normalizeConnectorStatus
 } from "../utils/status";
 
-// Normalize transaction identifiers to `string | undefined` (never null) before storing in state.
-const normalizeTxId = (tx?: string | null) => (typeof tx === "string" && tx.trim().length ? tx : undefined);
+// Normalize transaction identifiers to canonical strings (strip leading zeros) or undefined.
+const normalizeTxId = (tx?: string | number | null) => {
+  if (tx === null || tx === undefined) return undefined;
+  const value = typeof tx === "string" ? tx.trim() : tx.toString().trim();
+  if (!value.length) return undefined;
+  const stripped = value.replace(/^0+/, "");
+  return stripped.length ? stripped : "0";
+};
 
 export const shouldConnectTelemetry = ({
   cmsConnected,
@@ -179,7 +194,6 @@ export const shouldPollTelemetry = ({
     return normalized === "CHARGING" || normalized === "PREPARING" || normalized === "FINISHING";
   });
   if (socketStale || samplesStale) return true;
-  if (connectorActive) return true;
   if (hasTxWithoutSamples) return true;
   if (hasActiveSession && samplesStale) return true;
   return false;
@@ -450,10 +464,11 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
   const setStartAnchor = useCallback(
     (connectorId: number, transactionId: string | null | undefined, isoTimestamp?: string | null, overwrite = false, reason?: string) => {
       if (!connectorId || !isoTimestamp) return;
-      const safeIso = clampFutureStart(isoTimestamp, connectorId, transactionId, reason ?? "anchor");
+      const normalizedTx = normalizeTxId(transactionId);
+      const safeIso = clampFutureStart(isoTimestamp, connectorId, normalizedTx, reason ?? "anchor");
       const parsed = Date.parse(safeIso ?? "");
       if (!Number.isFinite(parsed)) return;
-      const key = anchorKey(connectorId, transactionId);
+      const key = anchorKey(connectorId, normalizedTx);
       const existing = sessionStartAnchorRef.current[key];
       if (!existing || overwrite) {
         sessionStartAnchorRef.current[key] = safeIso!;
@@ -469,20 +484,27 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
 
   const getStartAnchor = useCallback((connectorId: number, transactionId?: string | null) => {
     if (!connectorId) return null;
-    const key = anchorKey(connectorId, transactionId);
+    const normalizedTx = normalizeTxId(transactionId);
+    const key = anchorKey(connectorId, normalizedTx);
     return sessionStartAnchorRef.current[key] ?? null;
   }, []);
 
   const deleteAnchor = useCallback((connectorId: number, transactionId?: string | null) => {
     if (!connectorId) return;
-    const key = anchorKey(connectorId, transactionId);
+    const normalizedTx = normalizeTxId(transactionId);
+    const key = anchorKey(connectorId, normalizedTx);
     if (sessionStartAnchorRef.current[key]) {
       delete sessionStartAnchorRef.current[key];
     }
   }, []);
 
   const migrateNoTxAnchor = (connectorId: number, transactionId?: string | null, fallbackStart?: string | null) => {
-    return migrateNoTxAnchorValue(sessionStartAnchorRef.current, connectorId, transactionId, fallbackStart);
+    return migrateNoTxAnchorValue(
+      sessionStartAnchorRef.current,
+      connectorId,
+      normalizeTxId(transactionId),
+      fallbackStart
+    );
   };
 
   const seedAnchorsFromHistory = useCallback(
@@ -1552,32 +1574,10 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
           const runtimeLastSampleTs = runtime?.lastSampleAt ? Date.parse(runtime.lastSampleAt) : null;
           const existingLastSampleTs = existingTimeline?.samples?.at(-1)?.timestamp ?? null;
           const latestSampleTs = Date.parse(reading.sampledAt);
-          const stale = isRuntimeStaleForRestSamples({
-            runtime,
-            runtimeLastSampleTs,
-            existingLastSampleTs,
-            latestSampleTs,
-            staleThreshold
-          });
-          if (!stale) {
-            if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
-              // eslint-disable-next-line no-console
-              console.debug("[simulator][meter.hydrate.skip]", {
-                connectorId,
-                targetTransaction,
-                sampleTransaction,
-                runtimeState: runtime?.state,
-                runtimeLastSampleTs,
-                existingLastSampleTs,
-                latestSampleTs
-              });
-            }
-            return;
-          }
-          // Promote to the REST tx when runtime is stale
-          targetTransaction = sampleTransaction ?? targetTransaction;
-          targetTxByConnector.set(connectorId, targetTransaction);
-          if (sampleTransaction) {
+          const stale = true; // always allow tx switch; don't block new transaction samples
+          if (stale) {
+            targetTransaction = sampleTransaction ?? targetTransaction;
+            targetTxByConnector.set(connectorId, targetTransaction);
             const normalizedLatest = normalizeSample(
               {
                 connectorId,
@@ -1595,15 +1595,6 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
             stalePromotions.push({ connectorId, newTx: sampleTransaction, latestSample: normalizedLatest });
             delete pendingSamplesRef.current[connectorId];
             frozenConnectorsRef.current.delete(connectorId);
-            if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
-              // eslint-disable-next-line no-console
-              console.debug("[simulator][meter.hydrate.promote]", {
-                connectorId,
-                from: targetTransaction,
-                to: sampleTransaction,
-                latestSampleTs
-              });
-            }
           }
         }
         if (!targetTransaction && sampleTransaction) {
@@ -1655,7 +1646,8 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
           const meterStopWh = Math.max(latestSample.valueWh, meterStartWh ?? 0, existing?.meterStopWh ?? 0);
           deleteAnchor(connectorId, existing?.transactionId ?? null);
           deleteAnchor(connectorId, null);
-          setStartAnchor(connectorId, normalizedTx, latestSample.isoTimestamp, true, "meter-values-promote");
+          // Do not overwrite an existing anchor; keep earliest start for this tx.
+          setStartAnchor(connectorId, normalizedTx, latestSample.isoTimestamp, false, "meter-values-promote");
           next[connectorId] = {
             connectorId,
             transactionId: normalizedTx ?? existing?.transactionId,
@@ -2494,7 +2486,9 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
   useEffect(() => {
     const meterIntervalMs = Math.max((data?.default_meter_value_interval ?? 5) * 1000, 3000);
     const staleThreshold = meterIntervalMs * 2;
-    const pollPeriod = Math.min(Math.max(meterIntervalMs, 3000), 5000);
+    // Jittered 5–10s to avoid hammering
+    const basePeriod = Math.min(Math.max(meterIntervalMs * 2, 5000), 10000);
+    const pollPeriod = basePeriod + Math.round(Math.random() * 750);
 
     const tick = () => {
       const latestSampleTs = Object.values(meterTimelines)
@@ -2531,6 +2525,21 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
         if (isFetching) return;
         queryClient.invalidateQueries({
           queryKey: queryKeys.meterValues({ simulator: simulatorId, limit: METER_HISTORY_LIMIT })
+        });
+        simDebug("meter.poller.state", {
+          enabled: true,
+          reason: "stale-or-offline",
+          socketStatus,
+          lastWsMessageAt: lastWsMessageAtState,
+          latestSampleTs
+        });
+      } else {
+        simDebug("meter.poller.state", {
+          enabled: false,
+          reason: "fresh-live-telemetry",
+          socketStatus,
+          lastWsMessageAt: lastWsMessageAtState,
+          latestSampleTs
         });
       }
     };

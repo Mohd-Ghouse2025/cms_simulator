@@ -16,7 +16,11 @@ export type ChargerLifecycleState =
   | "POWERED_ON"
   | "CONNECTING"
   | "CONNECTED"
+  | "PREPARING"
   | "CHARGING"
+  | "SUSPENDEDEV"
+  | "SUSPENDEDEVSE"
+  | "FINISHING"
   | "ERROR";
 export type SimulatorInstanceStatus =
   | "pending"

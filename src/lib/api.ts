@@ -111,9 +111,8 @@ export class TenantApiClient {
       signal: config.signal
     });
 
-    const isUnauthorized = response.status === 401 || response.status === 403;
-    if (isUnauthorized) {
-      if (response.status === 401 && this.tokens?.refresh) {
+    if (response.status === 401) {
+      if (this.tokens?.refresh) {
         const refreshed = await this.onRefresh();
         if (refreshed) {
           this.tokens = refreshed;
@@ -122,6 +121,16 @@ export class TenantApiClient {
       }
       this.onLogout({ reason: "expired" });
       throw new ApiError("Session expired", response.status, null);
+    }
+    if (response.status === 403) {
+      let detailMessage: string | null = null;
+      try {
+        const data = await response.json();
+        detailMessage = extractDetailMessage(data);
+      } catch {
+        detailMessage = null;
+      }
+      throw new ApiError(detailMessage ?? "Access denied: role required", 403, null);
     }
 
     if (!response.ok) {

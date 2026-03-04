@@ -85,11 +85,8 @@ export const useSimulatorQueries = (
     staleTime: 15_000,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
-    // Hard fallback: while charging, poll meter values every ~3s even if websocket is quiet.
-    refetchInterval:
-      normalizedLifecycle === "CHARGING" || normalizedLifecycle === "CONNECTED"
-        ? 3_000
-        : false
+    // Polling owned by useSimulatorTelemetry fallback poller to avoid double hammering.
+    refetchInterval: false
   });
 
   const sessionsQuery = useQuery({

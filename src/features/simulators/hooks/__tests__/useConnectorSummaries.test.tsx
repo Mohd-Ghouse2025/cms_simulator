@@ -271,6 +271,100 @@ describe("useConnectorSummaries cost capping", () => {
     expect(summary.statusLabel).toBe("Available");
   });
 
+  it("resets duration anchors when transaction changes", () => {
+    const fixedNow = 1_771_432_000_000;
+    const firstStart = new Date(fixedNow - 3_600_000).toISOString(); // 1h ago
+    const base = {
+      ...baseArgs,
+      data: { connectors: [{ connector_id: 1, initial_status: "CHARGING" }] },
+      cmsSessionsIndex: { byId: new Map(), byFormatted: new Map(), byConnectorNumber: new Map() },
+      cmsConnectorIndex: { byId: new Map(), byNumber: new Map() },
+      defaultPricePerKwh: null,
+      resolveMeterStart: () => 0
+    };
+    const { result, rerender } = renderHook(
+      (props: any) =>
+        useConnectorSummaries({
+          ...props.base,
+          nowTs: props.nowTs,
+          meterTimelines: props.timeline,
+          sessionsByConnector: props.sessions
+        }),
+      {
+        initialProps: {
+          base,
+          nowTs: fixedNow,
+          timeline: {
+            1: {
+              transactionId: "tx-old",
+              transactionKey: "tx-old",
+              samples: [
+                {
+                  ...sample,
+                  connectorId: 1,
+                  transactionId: "tx-old",
+                  timestamp: Date.parse(firstStart),
+                  isoTimestamp: firstStart
+                }
+              ]
+            }
+          },
+          sessions: {
+            1: {
+              connectorId: 1,
+              transactionId: "tx-old",
+              state: "charging",
+              activeSession: true,
+              startedAt: firstStart,
+              meterStartWh: 0,
+              meterStopWh: 100
+            }
+          }
+        }
+      }
+    );
+
+    const initial = result.current.connectorsSummary[0];
+    expect(initial.duration?.startsWith("01:00")).toBe(true);
+
+    const newSampleTs = fixedNow - 2_000;
+    const newStart = new Date(newSampleTs).toISOString();
+    rerender({
+      base,
+      nowTs: fixedNow,
+      timeline: {
+        1: {
+          transactionId: "tx-new",
+          transactionKey: "tx-new",
+          samples: [
+            {
+              ...sample,
+              connectorId: 1,
+              transactionId: "tx-new",
+              timestamp: newSampleTs,
+              isoTimestamp: newStart
+            }
+          ]
+        }
+      },
+      sessions: {
+        1: {
+          connectorId: 1,
+          transactionId: "tx-new",
+          state: "charging",
+          activeSession: true,
+          startedAt: newStart,
+          meterStartWh: 0,
+          meterStopWh: 50
+        }
+      }
+    });
+
+    const next = result.current.connectorsSummary[0];
+    expect(next.transactionId).toBe("tx-new");
+    expect(next.duration).toBe("00:00:02");
+  });
+
   it("falls back to metadata.cms_status when live_status is missing", () => {
     const { result } = renderHook(() =>
       useConnectorSummaries({

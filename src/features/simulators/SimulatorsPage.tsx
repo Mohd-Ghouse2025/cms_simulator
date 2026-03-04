@@ -168,7 +168,23 @@ export const SimulatorsPage = () => {
           ...(lifecycleQuery ? { lifecycle_state: lifecycleQuery } : {})
         }
       }),
-    refetchInterval: 5_000
+    refetchInterval: (query) => {
+      const items = (query.state.data as { results?: SimulatedCharger[] } | undefined)?.results ?? [];
+      const transitional = items.some((sim) =>
+        ["PREPARING", "CHARGING", "SUSPENDEDEV", "SUSPENDEDEVSE", "FINISHING", "CONNECTING", "POWERED_ON"].includes(
+          normalizeLifecycleState(sim.lifecycle_state) ?? ""
+        )
+      );
+      return transitional ? 5_000 : false;
+    },
+    refetchOnWindowFocus: (query) => {
+      const items = (query.state.data as { results?: SimulatedCharger[] } | undefined)?.results ?? [];
+      return items.some((sim) =>
+        ["PREPARING", "CHARGING", "SUSPENDEDEV", "SUSPENDEDEVSE", "FINISHING", "CONNECTING", "POWERED_ON"].includes(
+          normalizeLifecycleState(sim.lifecycle_state) ?? ""
+        )
+      );
+    }
   });
 
   const instanceQuery = useQuery({
