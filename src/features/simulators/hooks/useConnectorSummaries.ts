@@ -192,7 +192,7 @@ export const useConnectorSummaries = ({
           case "FAULTED":
             return "errored";
           case "PREPARING":
-            return "authorized";
+            return "pending"; // Plugged-in but no active session yet; do not treat as active
           case "UNAVAILABLE":
             return "pending";
           case "RESERVED":
@@ -248,7 +248,7 @@ export const useConnectorSummaries = ({
         activeSessionState
       });
 
-      const runtimeActive = runtime?.activeSession || connectorHasSession;
+      let runtimeActive = Boolean(runtime?.activeSession) || connectorHasSession;
       const runtimeMeterStartWh =
         runtimeTxMatches || runtimeActive ? runtime?.meterStartWh : undefined;
       const earliestSampleWh = samples[0]?.valueWh ?? null;
@@ -270,6 +270,9 @@ export const useConnectorSummaries = ({
       // Treat a session as completed only when telemetry / runtime both indicate completion
       // and no active session is detected on this connector.
       const isCompleted = sessionFinished && !connectorHasSession && sessionState === "completed";
+      if (sessionState === "completed" || isCompleted) {
+        runtimeActive = false;
+      }
       const activeStopInputs = [runtimeStopWh, latestSampleWh, cmsMeterStopWh, meterStartWh];
       const activeStop = maxFinite(activeStopInputs);
       const finalStopRaw = firstFinite([runtimeFinalWh, cmsMeterStopWh, runtimeStopWh, latestSampleWh, meterStartWh]);

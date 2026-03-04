@@ -117,9 +117,6 @@ export const connectorHasActiveSession = ({
     activeSessionConnectorId !== null &&
     connectorId === activeSessionConnectorId
   ) {
-    if (!activeSessionState) {
-      return true;
-    }
     return isActiveSessionState(activeSessionState);
   }
   return false;
