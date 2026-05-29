@@ -713,10 +713,6 @@ const SimulatorRow = ({
   const cmsBadge = cmsBadgeFor(cmsConnected, cmsOnlineResolved);
   const lifecycleBlocked = lifecycle === "OFFLINE" || lifecycle === "ERROR" || lifecycle === "CHARGING";
   const isBusy = Boolean(busyAction);
-  const runtimeErrorMessage =
-    lifecycle === "ERROR"
-      ? (instance?.error_message || simulator.last_error_message || "").trim()
-      : "";
   const navigateToDetail = useCallback(() => {
     router.push(`/simulators/${simulator.id}`);
   }, [router, simulator.id]);
@@ -769,16 +765,6 @@ const SimulatorRow = ({
       };
     }
 
-    if (lifecycle === "ERROR") {
-      return {
-        action: "powerOn" as SimulatorAction,
-        label: busyAction === "powerOn" ? "Recovering…" : "Recover & Power",
-        disabled: isBusy,
-        variant: "powerOn" as const,
-        title: runtimeErrorMessage || "Recover the simulator runtime."
-      };
-    }
-
     if (cmsConnected) {
       return {
         action: "disconnect" as SimulatorAction,
@@ -799,6 +785,16 @@ const SimulatorRow = ({
         title: label === "Reconnect"
           ? "CMS heartbeat missing — reconnect to resume telemetry."
           : "Connect the simulator to the CMS."
+      };
+    }
+
+    if (lifecycle === "ERROR") {
+      return {
+        action: "powerOn" as SimulatorAction,
+        label: busyAction === "powerOn" ? "Recovering…" : "Recover & Power",
+        disabled: isBusy,
+        variant: "powerOn" as const,
+        title: "Recover the simulator runtime."
       };
     }
 
@@ -876,11 +872,6 @@ const SimulatorRow = ({
         <div className={styles.runtimeCell}>
           <span className={styles.runtimeStatus}>{runtimeStatus}</span>
           <span className={styles.runtimeMeta}>Last heartbeat: {heartbeat}</span>
-          {runtimeErrorMessage ? (
-            <span className={styles.runtimeError} title={runtimeErrorMessage}>
-              {runtimeErrorMessage}
-            </span>
-          ) : null}
         </div>
       </td>
       <td>{renderStatusChip(cmsBadge.label, cmsBadge.tone)}</td>

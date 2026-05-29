@@ -269,15 +269,6 @@
   color: var(--color-slate-400);
 }
 
-.runtimeError {
-  max-width: 280px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  color: var(--color-danger);
-}
-
 .statusChip {
   display: inline-flex;
   align-items: center;
