@@ -64,7 +64,6 @@ describe("SimulatorsPage runtime gating", () => {
             simulator={simulator}
             rowIndex={1}
             instance={instance}
-            cmsOnline={false}
             busyAction={null}
             performAction={() => undefined}
             router={{ push: vi.fn() } as any}
@@ -75,6 +74,80 @@ describe("SimulatorsPage runtime gating", () => {
 
     const powerButton = screen.getByRole("button", { name: /Power On/i });
     expect(powerButton).toBeEnabled();
+
+    vi.useRealTimers();
+  });
+
+  it("prioritizes recovery and shows the runtime error when CMS presence is stale", () => {
+    const now = new Date("2025-01-01T00:00:00Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+
+    const simulator: SimulatedCharger = {
+      id: 2,
+      charger: 2,
+      charger_id: "SIM-2",
+      alias: "Sim Two",
+      protocol_variant: "1.6j",
+      require_tls: false,
+      allowed_cidrs: [],
+      default_heartbeat_interval: 60,
+      default_meter_value_interval: 60,
+      default_status_interval: 60,
+      lifecycle_state: "ERROR",
+      last_error_message: "'SimulatedCharger' object has no attribute 'charger_id'",
+      latest_instance_status: "error",
+      latest_instance_last_heartbeat: now.toISOString(),
+      simulator_version: "",
+      firmware_baseline: "",
+      ocpp_capabilities: [],
+      notes: "",
+      connectors: [],
+      created_at: now.toISOString(),
+      updated_at: now.toISOString(),
+      smart_charging_profile: {},
+      telemetrySnapshot: null,
+      telemetryHistory: null,
+      cms_online: true,
+      cms_present: true,
+      cms_last_heartbeat: now.toISOString(),
+      price_per_kwh: null
+    };
+
+    const instance: SimulatorInstance = {
+      id: 20,
+      sim: simulator.id,
+      status: "error",
+      protocol_driver: "1.6j",
+      created_at: now.toISOString(),
+      updated_at: now.toISOString(),
+      started_at: now.toISOString(),
+      last_heartbeat: now.toISOString(),
+      error_message: "'SimulatedCharger' object has no attribute 'charger_id'",
+      celery_queue: "",
+      worker_hostname: "",
+      process_id: null,
+      runtime_pidfile: null
+    };
+
+    render(
+      <table>
+        <tbody>
+          <SimulatorRow
+            simulator={simulator}
+            rowIndex={1}
+            instance={instance}
+            busyAction={null}
+            performAction={() => undefined}
+            router={{ push: vi.fn() } as any}
+          />
+        </tbody>
+      </table>
+    );
+
+    expect(screen.getByText(/object has no attribute 'charger_id'/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Recover & Power/i })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: /Disconnect/i })).not.toBeInTheDocument();
 
     vi.useRealTimers();
   });
