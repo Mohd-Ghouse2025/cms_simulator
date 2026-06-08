@@ -88,4 +88,36 @@ describe("LiveMeterCard", () => {
     expect(screen.getByText(/Cost so far/i)).toBeInTheDocument();
     expect(screen.getAllByText(/Limit/i).length).toBeGreaterThan(0);
   });
+
+  it("freezes completed session duration at the session end time", () => {
+    render(
+      <LiveMeterCardV2
+        primaryConnector={{
+          ...baseConnector,
+          sessionState: "completed",
+          connectorStatus: "AVAILABLE",
+          statusLabel: "Available",
+          sessionStatusLabel: "Completed",
+          startedAt: "2026-06-08T09:03:00.000Z",
+          completedAt: "2026-06-08T09:05:08.000Z",
+          duration: "00:02:08",
+          isFinal: true,
+          activeSession: false
+        }}
+        placeholderMessage="placeholder"
+        graphIsFrozen
+        lastSampleIsStale={false}
+        meterIntervalSeconds={1}
+        statusToneClassMap={{
+          success: "",
+          info: "",
+          warning: "",
+          danger: "",
+          neutral: ""
+        }}
+      />
+    );
+
+    expect(screen.getAllByText("00:02:08").length).toBeGreaterThan(0);
+  });
 });

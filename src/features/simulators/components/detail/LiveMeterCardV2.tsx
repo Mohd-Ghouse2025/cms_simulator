@@ -71,12 +71,13 @@ export const LiveMeterCardV2 = ({
     if (!connector) return "—";
     const startMs = resolveStartMs(connector);
     const completedAt = connector.completedAt ?? null;
-    const isComplete = connector.sessionState === "completed";
+    const completedMs = completedAt && Number.isFinite(Date.parse(completedAt)) ? Date.parse(completedAt) : null;
+    const isComplete = connector.sessionState === "completed" || connector.isFinal || completedMs !== null;
     if (startMs === null || !Number.isFinite(startMs)) return connector.duration ?? "—";
-    const endMs =
-      isComplete && completedAt && Number.isFinite(Date.parse(completedAt))
-        ? Date.parse(completedAt)
-        : Date.now();
+    if (!isComplete && connector.activeSession === false && connector.duration) {
+      return connector.duration;
+    }
+    const endMs = completedMs ?? Date.now();
     const spanSeconds = Math.max(0, Math.floor((endMs - startMs) / 1000));
     logDuration({
       connectorId: connector.connectorId,
@@ -110,8 +111,7 @@ export const LiveMeterCardV2 = ({
       primaryConnector?.lastSampleAt ??
       primaryConnector?.samples?.[0]?.isoTimestamp ??
       null;
-    const completedAt =
-      (primaryConnector?.sessionState === "completed" ? primaryConnector?.completedAt : null) ?? null;
+    const completedAt = primaryConnector?.completedAt ?? null;
     // reset clamped cache when tx changes
     if (lastTxRef.current !== txKey) {
       clampedStartRef.current.clear();
@@ -130,7 +130,10 @@ export const LiveMeterCardV2 = ({
       });
     }
     tick();
-    const ticking = sessionState === "charging" || sessionState === "authorized" || sessionState === "finishing";
+    const ticking =
+      (sessionState === "charging" || sessionState === "authorized" || sessionState === "finishing") &&
+      primaryConnector?.activeSession !== false &&
+      !primaryConnector?.completedAt;
     const canTick = ticking && (startedAt || resolveStartMs(primaryConnector) !== null);
     if (!canTick) return;
     const timer = window.setInterval(tick, 1000);
@@ -142,7 +145,8 @@ export const LiveMeterCardV2 = ({
     primaryConnector?.startedAt,
     primaryConnector?.lastSampleAt,
     primaryConnector?.completedAt,
-    primaryConnector?.sessionState
+    primaryConnector?.sessionState,
+    primaryConnector?.activeSession
   ]);
 
   const durationLabel = useMemo(() => durationLive, [durationLive]);

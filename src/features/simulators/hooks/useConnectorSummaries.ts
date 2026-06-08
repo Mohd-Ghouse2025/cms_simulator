@@ -267,9 +267,12 @@ export const useConnectorSummaries = ({
         sessionState === "completed" ||
         runtime?.state === "completed" ||
         Boolean(runtime?.completedAt ?? cmsSession?.end_time);
-      // Treat a session as completed only when telemetry / runtime both indicate completion
-      // and no active session is detected on this connector.
-      const isCompleted = sessionFinished && !connectorHasSession && sessionState === "completed";
+      // Treat any ended CMS/runtime session as a frozen snapshot once no active
+      // session is detected on this connector. The physical connector may have
+      // already returned to Available, but the selected historical transaction
+      // should still render with a fixed end time.
+      const isCompleted = sessionFinished && !connectorHasSession;
+      const effectiveSessionState = isCompleted ? ("completed" as SessionLifecycle) : sessionState;
       if (sessionState === "completed" || isCompleted) {
         runtimeActive = false;
       }
@@ -330,9 +333,9 @@ export const useConnectorSummaries = ({
       const roundedCost = rawCost !== null ? Math.round(rawCost * 100) / 100 : null;
       const backendCost = toFiniteNumber(
         (cmsSession as any)?.cost_final ??
-          cmsSession?.payable_amount ??
           cmsSession?.cost ??
-          cmsSession?.cost_raw
+          cmsSession?.cost_raw ??
+          cmsSession?.payable_amount
       );
       const costSoFar = (() => {
         if (limitType === "AMOUNT") {
@@ -504,12 +507,12 @@ export const useConnectorSummaries = ({
         connectorId,
         connector,
         samples,
-        sessionState,
+        sessionState: effectiveSessionState,
         connectorStatus,
         statusLabel: formatConnectorStatusLabel(connectorStatus),
         statusTone: connectorStatusTone(connectorStatus),
-        sessionStatusLabel: getSessionStatusLabel(sessionState),
-        sessionStatusClass: getSessionStatusClass(sessionState),
+        sessionStatusLabel: getSessionStatusLabel(effectiveSessionState),
+        sessionStatusClass: getSessionStatusClass(effectiveSessionState),
         transactionId: txForAnchors ?? undefined,
         transactionKey:
           runtime?.transactionKey ??
