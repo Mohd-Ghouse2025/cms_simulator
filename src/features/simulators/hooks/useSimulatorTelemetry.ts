@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QueryClient } from "@tanstack/react-query";
+import { ApiError } from "@/lib/api";
 import { endpoints } from "@/lib/endpoints";
 import { queryKeys } from "@/lib/queryKeys";
 import { pickCanonicalTransactionId } from "@/lib/transactions";
@@ -68,6 +69,20 @@ const simDebug = (label: string, payload?: unknown) => {
 };
 
 const anchorKey = (connectorId: number, txId?: string | null) => `${connectorId}:${txId ?? "no-tx"}`;
+const HISTORY_HYDRATE_MIN_INTERVAL_MS = 30_000;
+const HISTORY_HYDRATE_THROTTLE_BACKOFF_MS = 45_000;
+const HISTORY_HYDRATE_ERROR_LOG_INTERVAL_MS = 30_000;
+
+const throttleWaitMs = (error: unknown) => {
+  if (!(error instanceof ApiError) || error.status !== 429) return null;
+  const detail =
+    error.data && typeof error.data === "object" && "detail" in error.data
+      ? String((error.data as { detail?: unknown }).detail ?? "")
+      : error.message;
+  const secondsMatch = detail.match(/available in\s+(\d+)\s+second/i);
+  const serverWaitMs = secondsMatch ? Number(secondsMatch[1]) * 1000 : 0;
+  return Math.max(serverWaitMs + 5_000, HISTORY_HYDRATE_THROTTLE_BACKOFF_MS);
+};
 
 const pickEarliestIso = (candidates: Array<string | undefined | null>): string | null => {
   const normalize = (value: string) => value.replace(/(\.\d{3})\d+/, "$1");
@@ -375,6 +390,9 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
   const resetFlowRef = useRef<ResetFlowState | null>(null);
   const timelineCardRef = useRef<EventTimelineHandle | null>(null);
   const pendingHistoryFetchesRef = useRef<Set<string>>(new Set());
+  const historyHydrateAttemptedAtRef = useRef<Record<string, number>>({});
+  const historyHydrateBackoffUntilRef = useRef<Record<string, number>>({});
+  const historyHydrateErrorLoggedAtRef = useRef<Record<string, number>>({});
   // Tracks the last time we attempted to hydrate an active session that was missing live telemetry.
   const lastActiveHydrateRef = useRef<Record<string, number>>({});
 
@@ -548,7 +566,13 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
     async (connectorId: number, transactionId?: string | null) => {
       if (!Number.isFinite(connectorId) || connectorId <= 0 || !transactionId) return;
       const fetchKey = `${connectorId}:${transactionId}`;
+      const now = Date.now();
+      const backoffUntil = historyHydrateBackoffUntilRef.current[fetchKey] ?? 0;
+      if (now < backoffUntil) return;
+      const lastAttempt = historyHydrateAttemptedAtRef.current[fetchKey] ?? 0;
+      if (now - lastAttempt < HISTORY_HYDRATE_MIN_INTERVAL_MS) return;
       if (pendingHistoryFetchesRef.current.has(fetchKey)) return;
+      historyHydrateAttemptedAtRef.current[fetchKey] = now;
       pendingHistoryFetchesRef.current.add(fetchKey);
       try {
         const response = await api.requestPaginated<SimulatedMeterValue>(endpoints.meterValues, {
@@ -621,7 +645,18 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
         });
         applyTelemetryHistory(normalizedByConnector);
       } catch (error) {
-        console.error("Failed to hydrate connector history", error);
+        const throttleMs = throttleWaitMs(error);
+        if (throttleMs !== null) {
+          historyHydrateBackoffUntilRef.current[fetchKey] = Date.now() + throttleMs;
+          simDebug("meter.hydrate.throttled", { connectorId, transactionId, retryAfterMs: throttleMs });
+          return;
+        }
+        const loggedAt = historyHydrateErrorLoggedAtRef.current[fetchKey] ?? 0;
+        const nowTs = Date.now();
+        if (nowTs - loggedAt > HISTORY_HYDRATE_ERROR_LOG_INTERVAL_MS) {
+          historyHydrateErrorLoggedAtRef.current[fetchKey] = nowTs;
+          console.error("Failed to hydrate connector history", error);
+        }
       } finally {
         pendingHistoryFetchesRef.current.delete(fetchKey);
       }
@@ -639,6 +674,11 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
     setSessionsByConnector({});
     frozenConnectorsRef.current.clear();
     pendingSamplesRef.current = {};
+    pendingHistoryFetchesRef.current.clear();
+    historyHydrateAttemptedAtRef.current = {};
+    historyHydrateBackoffUntilRef.current = {};
+    historyHydrateErrorLoggedAtRef.current = {};
+    lastActiveHydrateRef.current = {};
   }, [simulatorId]);
 
   useEffect(() => {
