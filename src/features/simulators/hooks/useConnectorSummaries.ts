@@ -321,10 +321,10 @@ export const useConnectorSummaries = ({
         return null;
       })();
       const pricePerKwh =
-        typeof runtime?.pricePerKwh === "number"
-          ? runtime.pricePerKwh
-          : typeof cmsSession?.price_per_kwh === "number"
-            ? cmsSession.price_per_kwh
+        typeof cmsSession?.price_per_kwh === "number"
+          ? cmsSession.price_per_kwh
+          : typeof runtime?.pricePerKwh === "number"
+            ? runtime.pricePerKwh
             : typeof defaultPricePerKwh === "number"
               ? defaultPricePerKwh
               : null;

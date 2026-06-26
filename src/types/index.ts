@@ -227,6 +227,7 @@ export interface SimulatedSession {
   meter_start_wh?: number | null;
   meter_stop_wh?: number | null;
   meter_target_wh?: number | null;
+  price_per_kwh?: number | null;
   meter_curve?: unknown[];
   metadata?: Record<string, unknown>;
   created_at: string;

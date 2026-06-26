@@ -1522,7 +1522,7 @@ export const useSimulatorTelemetry = (args: UseSimulatorTelemetryArgs) => {
             meterStopFinalWh: (state === "completed" ? meterStopWh : undefined) ?? (txChanged ? undefined : existing?.meterStopFinalWh),
             isFinal: state === "completed" || (txChanged ? false : existing?.isFinal),
             activeSession: state === "authorized" || state === "charging" || state === "finishing",
-            pricePerKwh: data?.price_per_kwh ?? existing?.pricePerKwh ?? null,
+            pricePerKwh: coerceNumber(session.price_per_kwh) ?? existing?.pricePerKwh ?? data?.price_per_kwh ?? null,
             maxKw: connectorInfo?.max_kw ?? existing?.maxKw ?? null,
             userLimit: isSameTx ? userLimit ?? existing?.userLimit ?? null : userLimit ?? null,
             limitType: isSameTx ? limitType ?? existing?.limitType ?? null : limitType ?? null

@@ -96,6 +96,53 @@ describe("useConnectorSummaries cost capping", () => {
     expect(summary.limitType).toBe("KWH");
   });
 
+  it("prefers CMS session tariff over simulator base price", () => {
+    const cmsSession = {
+      id: 397,
+      connector: 1,
+      transaction_id: 10105,
+      formatted_transaction_id: "tx1",
+      start_time: new Date().toISOString(),
+      end_time: null,
+      meter_start: 465,
+      meter_stop: null,
+      price_per_kwh: 14.45,
+      cost: null
+    };
+
+    const { result } = renderHook(() =>
+      useConnectorSummaries({
+        ...baseArgs,
+        data: { connectors: [{ connector_id: 1, initial_status: "CHARGING" }] },
+        meterTimelines: {
+          1: { transactionId: "tx1", transactionKey: "tx1", samples: [sample] }
+        },
+        sessionsByConnector: {
+          1: {
+            connectorId: 1,
+            transactionId: "tx1",
+            state: "charging",
+            meterStartWh: 465,
+            meterStopWh: 510,
+            activeSession: true,
+            pricePerKwh: 17
+          }
+        },
+        cmsSessionsIndex: {
+          byId: new Map(),
+          byFormatted: new Map([["tx1", cmsSession]]),
+          byConnectorNumber: new Map()
+        },
+        cmsConnectorIndex: { byId: new Map(), byNumber: new Map() },
+        defaultPricePerKwh: 17
+      })
+    );
+
+    const summary = result.current.connectorsSummary[0];
+    expect(summary.pricePerKwh).toBe(14.45);
+    expect(summary.costSoFar).toBeCloseTo(0.65, 2);
+  });
+
   it("falls back to now when active session has no start hints", () => {
     const fixedNow = 1_771_430_600_000; // deterministic epoch
     const { result } = renderHook(() =>
