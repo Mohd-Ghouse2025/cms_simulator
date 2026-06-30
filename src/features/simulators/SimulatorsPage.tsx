@@ -782,9 +782,11 @@ const SimulatorRow = ({
         label,
         disabled: isBusy,
         variant: "connect" as const,
-        title: label === "Reconnect"
-          ? "CMS heartbeat missing — reconnect to resume telemetry."
-          : "Connect the simulator to the CMS."
+        title: !hasActiveInstance
+          ? "Start a fresh runtime and connect the simulator to the CMS."
+          : label === "Reconnect"
+            ? "CMS heartbeat missing — reconnect to resume telemetry."
+            : "Connect the simulator to the CMS."
       };
     }
 

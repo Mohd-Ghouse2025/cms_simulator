@@ -78,4 +78,71 @@ describe("SimulatorsPage runtime gating", () => {
 
     vi.useRealTimers();
   });
+
+  it("uses the connect action when powered-on state has a stopped process", () => {
+    const now = new Date("2025-01-01T00:00:00Z");
+    const simulator: SimulatedCharger = {
+      id: 2,
+      charger: 2,
+      charger_id: "SIM-2",
+      alias: "Stopped Runtime",
+      protocol_variant: "1.6j",
+      require_tls: false,
+      allowed_cidrs: [],
+      default_heartbeat_interval: 60,
+      default_meter_value_interval: 60,
+      default_status_interval: 60,
+      lifecycle_state: "POWERED_ON",
+      latest_instance_status: "stopped",
+      latest_instance_last_heartbeat: null,
+      simulator_version: "",
+      firmware_baseline: "",
+      ocpp_capabilities: [],
+      notes: "",
+      connectors: [],
+      created_at: now.toISOString(),
+      updated_at: now.toISOString(),
+      smart_charging_profile: {},
+      telemetrySnapshot: null,
+      telemetryHistory: null,
+      cms_online: false,
+      cms_present: false,
+      cms_last_heartbeat: null,
+      price_per_kwh: null
+    };
+
+    const instance: SimulatorInstance = {
+      id: 11,
+      sim: simulator.id,
+      status: "stopped",
+      protocol_driver: "1.6j",
+      created_at: now.toISOString(),
+      updated_at: now.toISOString(),
+      started_at: now.toISOString(),
+      stopped_at: now.toISOString(),
+      last_heartbeat: null,
+      celery_queue: "",
+      worker_hostname: "",
+      process_id: null,
+      runtime_pidfile: null
+    };
+
+    render(
+      <table>
+        <tbody>
+          <SimulatorRow
+            simulator={simulator}
+            rowIndex={1}
+            instance={instance}
+            busyAction={null}
+            performAction={() => undefined}
+            router={{ push: vi.fn() } as any}
+          />
+        </tbody>
+      </table>
+    );
+
+    expect(screen.getByRole("button", { name: /^Connect$/i })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: /Start Runtime/i })).toBeNull();
+  });
 });

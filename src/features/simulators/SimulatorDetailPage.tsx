@@ -785,6 +785,7 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
   const latestInstanceStatus = latestInstance?.status ?? data.latest_instance_status ?? null;
   const hasActiveRuntime =
     latestInstanceStatus === "running" || latestInstanceStatus === "pending";
+  const runtimeMissing = lifecycleState === "POWERED_ON" && !hasActiveRuntime;
   const hideConnectionControls =
     lifecycleState === "OFFLINE" || lifecycleState === "ERROR" || lifecycleState === "CHARGING";
   const needsReconnect = !cmsConnected && !hideConnectionControls;
@@ -797,22 +798,33 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
     lifecycleState === "POWERED_ON";
   const showDisconnectControl =
     !hideConnectionControls && hasActiveRuntime && disconnectLifecycleAllowed;
-  const connectButtonLabel =
-    commandBusy === "connect" || lifecycleState === "CONNECTING"
-      ? "Connecting…"
-      : needsReconnect
-        ? "Reconnect"
-        : "Connect";
+  const connectButtonLabel = (() => {
+    if (commandBusy === "connect" || lifecycleState === "CONNECTING") return "Connecting…";
+    if (needsReconnect) return "Reconnect";
+    return "Connect";
+  })();
   const disconnectButtonLabel =
     commandBusy === "disconnect" || lifecycleState === "CONNECTING" ? "Disconnecting…" : "Disconnect";
   const connectControlDisabled = commandBusy !== null || lifecycleState === "CONNECTING";
   const disconnectControlDisabled = commandBusy !== null || !hasActiveRuntime;
-  const connectControlTitle =
-    lifecycleState === "CONNECTING"
-      ? "CMS connection in progress."
-      : needsReconnect
-        ? "CMS heartbeat missing — reconnect to resume telemetry."
-        : "Connect the simulator to the CMS.";
+  const cmsWarningDescription = (() => {
+    if (runtimeMissing) {
+      return "CMS communication is stopped. Connect will restart it and restore heartbeats.";
+    }
+    if (lifecycleState === "CONNECTING") {
+      return "Connection is in progress. Session controls unlock when CMS confirms heartbeats.";
+    }
+    if (needsReconnect) {
+      return "Heartbeats are unavailable. Session controls unlock when CMS is online.";
+    }
+    return "Session controls are locked until CMS communication is restored.";
+  })();
+  const connectControlTitle = (() => {
+    if (runtimeMissing) return "Start a fresh runtime and connect the simulator to the CMS.";
+    if (lifecycleState === "CONNECTING") return "CMS connection in progress.";
+    if (needsReconnect) return "CMS heartbeat missing; session controls are locked.";
+    return "Connect the simulator to the CMS.";
+  })();
   const disconnectControlTitle = (() => {
     if (!hasActiveRuntime) {
       return "No active simulator runtime to disconnect.";
@@ -882,6 +894,7 @@ export const SimulatorDetailPage = ({ simulatorId: simulatorIdProp }: SimulatorD
           showDisconnectControl={showDisconnectControl}
           connectControlDisabled={connectControlDisabled}
           disconnectControlDisabled={disconnectControlDisabled}
+          cmsWarningDescription={cmsWarningDescription}
           connectControlTitle={connectControlTitle}
           disconnectControlTitle={disconnectControlTitle}
           connectButtonLabel={connectButtonLabel}

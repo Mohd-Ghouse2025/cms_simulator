@@ -18,6 +18,7 @@ export type OverviewCardProps = {
   showDisconnectControl: boolean;
   connectControlDisabled: boolean;
   disconnectControlDisabled: boolean;
+  cmsWarningDescription: string;
   connectControlTitle?: string;
   disconnectControlTitle?: string;
   connectButtonLabel: string;
@@ -41,6 +42,7 @@ export const OverviewCard = ({
   showDisconnectControl,
   connectControlDisabled,
   disconnectControlDisabled,
+  cmsWarningDescription,
   connectControlTitle,
   disconnectControlTitle,
   connectButtonLabel,
@@ -81,12 +83,29 @@ export const OverviewCard = ({
       </div>
     {!cmsConnected ? (
       <div className={styles.cmsWarning} role="status">
-        <strong>CMS offline.</strong> Reconnect to resume heartbeats and enable session controls.
+        <div className={styles.cmsWarningText}>
+          <strong>CMS offline</strong>
+          <span>{cmsWarningDescription}</span>
+        </div>
+        {showConnectControl ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            className={styles.connectionButton}
+            disabled={connectControlDisabled}
+            title={connectControlTitle}
+            icon={<Plug size={16} />}
+            onClick={onConnect}
+          >
+            {connectButtonLabel}
+          </Button>
+        ) : null}
       </div>
     ) : null}
     {(showConnectControl || showDisconnectControl) && (
       <div className={styles.connectionControls}>
-        {showConnectControl ? (
+        {cmsConnected && showConnectControl ? (
           <Button
             type="button"
             size="sm"

@@ -32,6 +32,17 @@ export type PreferredConnectorCandidate = {
   connectorId: number;
   activeSession?: boolean;
   sessionState?: string | null;
+  completedAt?: string | null;
+  lastSampleAt?: string | null;
+  startedAt?: string | null;
+};
+
+const getLatestConnectorTimestamp = (connector: PreferredConnectorCandidate): number | null => {
+  const timestamps = [connector.completedAt, connector.lastSampleAt, connector.startedAt]
+    .map((value) => (value ? Date.parse(value) : NaN))
+    .filter((value) => Number.isFinite(value));
+  if (!timestamps.length) return null;
+  return Math.max(...timestamps);
 };
 
 export const pickActiveConnectorId = (
@@ -52,6 +63,13 @@ export const pickActiveConnectorId = (
   );
   if (stateActive && validIds.has(stateActive.connectorId)) {
     return stateActive.connectorId;
+  }
+  const latestHistorical = connectors
+    .map((connector) => ({ connector, timestamp: getLatestConnectorTimestamp(connector) }))
+    .filter((entry): entry is { connector: PreferredConnectorCandidate; timestamp: number } => entry.timestamp !== null)
+    .sort((a, b) => b.timestamp - a.timestamp)[0]?.connector;
+  if (latestHistorical && validIds.has(latestHistorical.connectorId)) {
+    return latestHistorical.connectorId;
   }
   return connectors[0]?.connectorId ?? null;
 };
